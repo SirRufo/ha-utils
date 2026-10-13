@@ -10,8 +10,11 @@ blueprint:
     - Sonne unter Höhen-Schwelle ODER nach Schließzeit: komplett schließen (Abendschutz / Sichtschutz)
     - Sonne über Höhen-Schwelle UND nach Öffnungszeit: komplett öffnen (morgens / keine Hitze),
       aber nur wenn der Behang noch auf Nacht- oder Schutzposition steht (manuelle Positionen bleiben unangetastet)
+    - Fensterkontakt (Pflicht): bei offenem Fenster mindestens auf Lüftungsposition
+      hochfahren, Abend-Schließung und Sonnenschutz fahren dann nie darunter.
+      Per Schalter Minimalschließung abschaltbar (Kontakt wird dann ignoriert).
 
-    Version: 2026-10-13.4
+    Version: 2026-10-13.6
 
     Hinweis: Pro Himmelsrichtung eine Automation aus diesem Blueprint anlegen,
     da alle Rollläden einer Automation dieselbe Ausrichtung teilen.
@@ -99,6 +102,45 @@ blueprint:
           step: 0.5
           unit_of_measurement: "°"
           mode: slider
+    fensterkontakt:
+      name: Fensterkontakt
+      description: >
+        Öffnungssensor (Fenstergriff / Reedkontakt, on = offen). Pflichtfeld.
+        Wirkt nur, wenn die Minimalschließung aktiviert ist: Solange das Fenster
+        offen ist, fahren die Rollläden mindestens auf Lüftungsposition hoch und
+        die Abend-Schließung wird ausgesetzt. Reaktion spätestens im nächsten
+        5-Minuten-Takt.
+      selector:
+        entity:
+          filter:
+            - domain: binary_sensor
+              device_class:
+                - window
+                - door
+                - opening
+    minimalschliessung:
+      name: Minimalschließung bei offenem Fenster
+      description: >
+        Wenn aktiv, fahren die Rollläden bei offenem Fensterkontakt mindestens
+        auf Lüftungsposition hoch; Abend-Schließung und Sonnenschutz fahren dann
+        nie darunter. Wenn inaktiv, wird der Fensterkontakt ignoriert.
+      default: true
+      selector:
+        boolean: {}
+    lueftungsposition:
+      name: Lüftungsposition (Mindestposition bei offenem Fenster)
+      description: >
+        Fahren die Rollläden mindestens so weit hoch (100 = offen, 0 = geschlossen),
+        solange der Fensterkontakt offen meldet. Wirkt nur, wenn die Minimalschließung
+        aktiviert ist. Typisch: 15–30, damit ein gekipptes Fenster freigängig bleibt.
+      default: 20
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 1
+          unit_of_measurement: "%"
+          mode: slider
     schutzposition:
       name: Sonnenschutz-Position
       description: >
@@ -164,6 +206,9 @@ variables:
   fenster_neigung: !input fenster_neigung
   azimuth_toleranz: !input azimuth_toleranz
   umgebungs_abschattung: !input umgebungs_abschattung
+  fensterkontakt: !input fensterkontakt
+  minimalschliessung: !input minimalschliessung
+  lueftungsposition: !input lueftungsposition
   schutzposition: !input schutzposition
   positionstoleranz: !input positionstoleranz
   sonnenhoehe_schwelle: !input sonnenhoehe_schwelle
@@ -208,16 +253,51 @@ action:
       nach_oeffnung: "{{ now() >= today_at(oeffnungszeit) }}"
       nach_schliessung: "{{ now() >= today_at(schliesszeit) }}"
       im_tagfenster: "{{ nach_oeffnung and not nach_schliessung }}"
+      fenster_offen: "{{ minimalschliessung and has_value(fensterkontakt) and is_state(fensterkontakt, 'on') }}"
   - choose:
+      # 0. Fenster offen: mindestens auf Lüftungsposition hochfahren (Freigängigkeit).
+      # Höchste Priorität, gilt Tag und Nacht. Ohne Kontakt nie aktiv.
+      - conditions:
+          - condition: template
+            value_template: "{{ fenster_offen }}"
+        sequence:
+          - variables:
+              lueftung_fahren: >
+                {% set ns = namespace(ids=[]) %}
+                {% set ziel = lueftungsposition | float(20) %}
+                {% set tol = positionstoleranz | float(3) %}
+                {% for c in expand(rolllaeden.entity_id | default([])) %}
+                  {% set pos = c.attributes.get('current_position', none) %}
+                  {% if pos is none %}
+                    {% if c.state == 'closed' and (ziel - tol) > 0 %}
+                      {% set ns.ids = ns.ids + [c.entity_id] %}
+                    {% endif %}
+                  {% elif pos | float(100) < (ziel - tol) %}
+                    {% set ns.ids = ns.ids + [c.entity_id] %}
+                  {% endif %}
+                {% endfor %}
+                {{ ns.ids }}
+          - condition: template
+            value_template: "{{ lueftung_fahren | count > 0 }}"
+          - service: cover.set_cover_position
+            target:
+              entity_id: "{{ lueftung_fahren }}"
+            data:
+              position: !input lueftungsposition
       # 1. Abend / Nacht: tiefstehende Sonne ODER nach Schließzeit -> komplett zu
       # Nur Rollläden anfahren, die nicht bereits geschlossen sind.
+      # Bei offenem Fenster ausgesetzt (Branch 0 sichert die Lüftungsposition).
       - conditions:
-          - condition: or
+          - condition: and
             conditions:
+              - condition: or
+                conditions:
+                  - condition: template
+                    value_template: "{{ sonne_tief }}"
+                  - condition: template
+                    value_template: "{{ nach_schliessung }}"
               - condition: template
-                value_template: "{{ sonne_tief }}"
-              - condition: template
-                value_template: "{{ nach_schliessung }}"
+                value_template: "{{ not fenster_offen }}"
         sequence:
           - variables:
               zu_fahren: >
@@ -237,6 +317,7 @@ action:
               entity_id: "{{ zu_fahren }}"
       # 2. Sonnenschutz: Sonne auf Fenster + zu warm + hoch genug + im Zeitfenster -> Schutzposition
       # Nur Rollläden anfahren, deren Position außerhalb der Toleranz liegt.
+      # Bei offenem Fenster nie unter die Lüftungsposition fahren (Branch 0 sichert das Minimum).
       - conditions:
           - condition: template
             value_template: "{{ sonne_auf_fenster and ist_zu_warm and sonne_hoch and im_tagfenster }}"
@@ -246,12 +327,16 @@ action:
                 {% set ns = namespace(ids=[]) %}
                 {% set ziel = schutzposition | float(25) %}
                 {% set tol = positionstoleranz | float(3) %}
-                {% for c in expand(rolllaeden.entity_id | default([])) %}
-                  {% set pos = c.attributes.get('current_position', none) %}
-                  {% if pos is none or ((pos | float(ziel) - ziel) | abs > tol) %}
-                    {% set ns.ids = ns.ids + [c.entity_id] %}
-                  {% endif %}
-                {% endfor %}
+                {% set mindest = lueftungsposition | float(20) %}
+                {% set schutz_erlaubt = (not fenster_offen) or (ziel >= mindest - tol) %}
+                {% if schutz_erlaubt %}
+                  {% for c in expand(rolllaeden.entity_id | default([])) %}
+                    {% set pos = c.attributes.get('current_position', none) %}
+                    {% if pos is none or ((pos | float(ziel) - ziel) | abs > tol) %}
+                      {% set ns.ids = ns.ids + [c.entity_id] %}
+                    {% endif %}
+                  {% endfor %}
+                {% endif %}
                 {{ ns.ids }}
           - condition: template
             value_template: "{{ schutz_fahren | count > 0 }}"
