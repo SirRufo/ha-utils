@@ -8,7 +8,8 @@ blueprint:
 
     - Tagsüber bei Sonne + Hitze: Fahre auf einstellbare Schutzposition
     - Sonne unter Höhen-Schwelle ODER nach Schließzeit: komplett schließen (Abendschutz / Sichtschutz)
-    - Sonne über Höhen-Schwelle UND nach Öffnungszeit: komplett öffnen (morgens / keine Hitze)
+    - Sonne über Höhen-Schwelle UND nach Öffnungszeit: komplett öffnen (morgens / keine Hitze),
+      aber nur wenn der Behang noch auf Nacht- oder Schutzposition steht (manuelle Positionen bleiben unangetastet)
 
     Version 2026-10-13
 
@@ -82,6 +83,19 @@ blueprint:
           step: 1
           unit_of_measurement: "%"
           mode: slider
+    positionstoleranz:
+      name: Positions-Toleranz
+      description: >
+        Keine Aktion, wenn die aktuelle Position bereits innerhalb dieser
+        Abweichung (± %) zur Zielposition liegt. Verhindert unnötige Fahrbefehle.
+      default: 3
+      selector:
+        number:
+          min: 0
+          max: 10
+          step: 1
+          unit_of_measurement: "%"
+          mode: slider
     sonnenhoehe_schwelle:
       name: Sonnenhöhen-Schwelle (Elevation)
       description: >
@@ -114,11 +128,13 @@ mode: restart
 max_exceeded: silent
 
 variables:
+  rolllaeden: !input rolllaeden
   temperatursensor: !input temperatursensor
   temperatur_schwelle: !input temperatur_schwelle
   fenster_ausrichtung: !input fenster_ausrichtung
   azimuth_toleranz: !input azimuth_toleranz
   schutzposition: !input schutzposition
+  positionstoleranz: !input positionstoleranz
   sonnenhoehe_schwelle: !input sonnenhoehe_schwelle
   oeffnungszeit: !input oeffnungszeit
   schliesszeit: !input schliesszeit
@@ -154,6 +170,7 @@ action:
       im_tagfenster: "{{ nach_oeffnung and not nach_schliessung }}"
   - choose:
       # 1. Abend / Nacht: tiefstehende Sonne ODER nach Schließzeit -> komplett zu
+      # Nur Rollläden anfahren, die nicht bereits geschlossen sind.
       - conditions:
           - condition: or
             conditions:
@@ -162,22 +179,78 @@ action:
               - condition: template
                 value_template: "{{ nach_schliessung }}"
         sequence:
+          - variables:
+              zu_fahren: >
+                {% set ns = namespace(ids=[]) %}
+                {% set tol = positionstoleranz | float(3) %}
+                {% for c in expand(rolllaeden.entity_id | default([])) %}
+                  {% set pos = c.attributes.get('current_position', none) %}
+                  {% if c.state != 'closed' and (pos is none or pos | float(100) > tol) %}
+                    {% set ns.ids = ns.ids + [c.entity_id] %}
+                  {% endif %}
+                {% endfor %}
+                {{ ns.ids }}
+          - condition: template
+            value_template: "{{ zu_fahren | count > 0 }}"
           - service: cover.close_cover
-            target: !input rolllaeden
+            target:
+              entity_id: "{{ zu_fahren }}"
       # 2. Sonnenschutz: Sonne auf Fenster + zu warm + hoch genug + im Zeitfenster -> Schutzposition
+      # Nur Rollläden anfahren, deren Position außerhalb der Toleranz liegt.
       - conditions:
           - condition: template
             value_template: "{{ sonne_auf_fenster and ist_zu_warm and sonne_hoch and im_tagfenster }}"
         sequence:
+          - variables:
+              schutz_fahren: >
+                {% set ns = namespace(ids=[]) %}
+                {% set ziel = schutzposition | float(25) %}
+                {% set tol = positionstoleranz | float(3) %}
+                {% for c in expand(rolllaeden.entity_id | default([])) %}
+                  {% set pos = c.attributes.get('current_position', none) %}
+                  {% if pos is none or ((pos | float(ziel) - ziel) | abs > tol) %}
+                    {% set ns.ids = ns.ids + [c.entity_id] %}
+                  {% endif %}
+                {% endfor %}
+                {{ ns.ids }}
+          - condition: template
+            value_template: "{{ schutz_fahren | count > 0 }}"
           - service: cover.set_cover_position
-            target: !input rolllaeden
+            target:
+              entity_id: "{{ schutz_fahren }}"
             data:
               position: !input schutzposition
       # 3. Morgen / Normal: Sonne hoch + nach Öffnung + im Zeitfenster -> auf (kein Hitzeschutz nötig)
+      # Manueller Eingriff wird respektiert: nur öffnen, wenn der Behang noch auf
+      # der erwarteten Nachtposition (zu) oder Schutzposition steht (± Toleranz).
       - conditions:
           - condition: template
             value_template: "{{ sonne_hoch and nach_oeffnung and im_tagfenster }}"
         sequence:
+          - variables:
+              auf_fahren: >
+                {% set ns = namespace(ids=[]) %}
+                {% set tol = positionstoleranz | float(3) %}
+                {% set ziel = schutzposition | float(25) %}
+                {% for c in expand(rolllaeden.entity_id | default([])) %}
+                  {% set pos = c.attributes.get('current_position', none) %}
+                  {% if pos is none %}
+                    {% if c.state == 'closed' %}
+                      {% set ns.ids = ns.ids + [c.entity_id] %}
+                    {% endif %}
+                  {% else %}
+                    {% set erwartet_nacht = pos | float(100) <= tol %}
+                    {% set erwartet_schutz = ((pos | float(ziel) - ziel) | abs <= tol) %}
+                    {% set braucht_oeffnung = c.state != 'open' and (pos | float(0) < (100 - tol)) %}
+                    {% if braucht_oeffnung and (erwartet_nacht or erwartet_schutz) %}
+                      {% set ns.ids = ns.ids + [c.entity_id] %}
+                    {% endif %}
+                  {% endif %}
+                {% endfor %}
+                {{ ns.ids }}
+          - condition: template
+            value_template: "{{ auf_fahren | count > 0 }}"
           - service: cover.open_cover
-            target: !input rolllaeden
+            target:
+              entity_id: "{{ auf_fahren }}"
     default: []
