@@ -83,12 +83,14 @@ blueprint:
     sonnenhoehe_schwelle:
       name: Sonnenhöhen-Schwelle (Elevation)
       description: >
-        Sonnenhöhe in Grad. Darunter = tiefe Sonne / Abend -> komplett schließen.
+        Sonnenhöhe in Grad, darf auch negativ sein (Sonne unter Horizont,
+        z.B. -4 für Schließen erst nach Sonnenuntergang).
+        Darunter = tiefe Sonne / Abend -> komplett schließen.
         Darüber + nach Öffnungszeit -> öffnen (wenn kein Hitzeschutz nötig).
       default: 12
       selector:
         number:
-          min: 0
+          min: -20
           max: 40
           step: 0.5
           unit_of_measurement: "°"
