@@ -1,5 +1,6 @@
 blueprint:
   name: Dynamischer Sonnenschutz für Rollläden
+  source_url: https://github.com/SirRufo/ha-utils/blob/main/blueprints/sonnenschutz_rollladen_temperatur_sonnenstand.yaml
   description: >
     Fährt Rollläden herunter, wenn die Sonne direkt auf das Fenster scheint
     (Prüfung über Fenster-Ausrichtung + Toleranz und Sonnen-Azimut)
