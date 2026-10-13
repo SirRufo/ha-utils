@@ -11,7 +11,7 @@ blueprint:
     - Sonne über Höhen-Schwelle UND nach Öffnungszeit: komplett öffnen (morgens / keine Hitze),
       aber nur wenn der Behang noch auf Nacht- oder Schutzposition steht (manuelle Positionen bleiben unangetastet)
 
-    Version: 2026-10-13.3
+    Version: 2026-10-13.4
 
     Hinweis: Pro Himmelsrichtung eine Automation aus diesem Blueprint anlegen,
     da alle Rollläden einer Automation dieselbe Ausrichtung teilen.
@@ -263,6 +263,8 @@ action:
       # 3. Morgen / Normal: Sonne hoch + nach Öffnung + im Zeitfenster -> auf (kein Hitzeschutz nötig)
       # Manueller Eingriff wird respektiert: nur öffnen, wenn der Behang noch auf
       # der erwarteten Nachtposition (zu) oder Schutzposition steht (± Toleranz).
+      # Hinweis: Der State darf hier NICHT geprüft werden - ein Behang auf
+      # Schutzposition meldet 'open' (Position > 0) und würde sonst nie öffnen.
       - conditions:
           - condition: template
             value_template: "{{ sonne_hoch and nach_oeffnung and im_tagfenster }}"
@@ -281,7 +283,7 @@ action:
                   {% else %}
                     {% set erwartet_nacht = pos | float(100) <= tol %}
                     {% set erwartet_schutz = ((pos | float(ziel) - ziel) | abs <= tol) %}
-                    {% set braucht_oeffnung = c.state != 'open' and (pos | float(0) < (100 - tol)) %}
+                    {% set braucht_oeffnung = pos | float(0) < (100 - tol) %}
                     {% if braucht_oeffnung and (erwartet_nacht or erwartet_schutz) %}
                       {% set ns.ids = ns.ids + [c.entity_id] %}
                     {% endif %}
