@@ -10,6 +10,8 @@ blueprint:
     - Sonne unter Höhen-Schwelle ODER nach Schließzeit: komplett schließen (Abendschutz / Sichtschutz)
     - Sonne über Höhen-Schwelle UND nach Öffnungszeit: komplett öffnen (morgens / keine Hitze)
 
+    Version 2026-10-13
+
     Hinweis: Pro Himmelsrichtung eine Automation aus diesem Blueprint anlegen,
     da alle Rollläden einer Automation dieselbe Ausrichtung teilen.
   domain: automation
