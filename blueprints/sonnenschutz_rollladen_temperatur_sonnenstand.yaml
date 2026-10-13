@@ -3,7 +3,7 @@ blueprint:
   source_url: https://github.com/SirRufo/ha-utils/blob/main/blueprints/sonnenschutz_rollladen_temperatur_sonnenstand.yaml
   description: >
     Fährt Rollläden herunter, wenn die Sonne direkt auf das Fenster scheint
-    (Prüfung über Fenster-Ausrichtung + Toleranz und Sonnen-Azimut)
+    (Prüfung über Fenster-Ausrichtung, Einbauwinkel und Sonnenstand per Einfallswinkel)
     UND ein Temperatursensor einen Schwellwert überschreitet (innen zu warm).
 
     - Tagsüber bei Sonne + Hitze: Fahre auf einstellbare Schutzposition
@@ -11,7 +11,7 @@ blueprint:
     - Sonne über Höhen-Schwelle UND nach Öffnungszeit: komplett öffnen (morgens / keine Hitze),
       aber nur wenn der Behang noch auf Nacht- oder Schutzposition steht (manuelle Positionen bleiben unangetastet)
 
-    Version: 2026-10-13.1
+    Version: 2026-10-13.2
 
     Hinweis: Pro Himmelsrichtung eine Automation aus diesem Blueprint anlegen,
     da alle Rollläden einer Automation dieselbe Ausrichtung teilen.
@@ -54,6 +54,20 @@ blueprint:
         number:
           min: 0
           max: 360
+          step: 1
+          unit_of_measurement: "°"
+          mode: slider
+    fenster_neigung:
+      name: Fenster-Neigung (Einbauwinkel)
+      description: >
+        Neigung der Scheibe gegen die Horizontale: 90 = senkrechtes Fenster,
+        45 = Dachfenster, 0 = waagerechter Lichtschacht im Flachdach.
+        Zusammen mit der Sonnenhöhe wird daraus der Lichteinfall berechnet.
+      default: 90
+      selector:
+        number:
+          min: 0
+          max: 90
           step: 1
           unit_of_measurement: "°"
           mode: slider
@@ -132,6 +146,7 @@ variables:
   temperatursensor: !input temperatursensor
   temperatur_schwelle: !input temperatur_schwelle
   fenster_ausrichtung: !input fenster_ausrichtung
+  fenster_neigung: !input fenster_neigung
   azimuth_toleranz: !input azimuth_toleranz
   schutzposition: !input schutzposition
   positionstoleranz: !input positionstoleranz
@@ -159,8 +174,17 @@ action:
       sun_azimuth: "{{ state_attr('sun.sun', 'azimuth') | float(0) }}"
       azimuth_diff: "{{ (((sun_azimuth | float(0) - fenster_ausrichtung | float(180) + 540) % 360) - 180) | abs }}"
       sonne_auf_fenster: >
-        {{ azimuth_diff | float(90) < azimuth_toleranz | float(45)
-           and sun_elevation | float(-90) > 2 }}
+        {# Einfallswinkel: cos(Einfall) = Skalarprodukt aus Sonnenvektor und Scheibennormale.
+           Scheibennormale zeigt auf Höhe (90 - Neigung) in Fenster-Ausrichtung.
+           > 0.05 heißt: Sonne trifft die Scheibe (Einfallswinkel < ca. 87°).
+           Bei fast waagerechten Scheiben (Neigung <= 10°) entfällt die Azimut-Prüfung. #}
+        {% set e = (sun_elevation | float(-90)) * pi / 180 %}
+        {% set ne = (90 - (fenster_neigung | float(90))) * pi / 180 %}
+        {% set d = ((sun_azimuth | float(0)) - (fenster_ausrichtung | float(180))) * pi / 180 %}
+        {% set kos_einfall = cos(e) * cos(ne) * cos(d) + sin(e) * sin(ne) %}
+        {% set az_ok = ((fenster_neigung | float(90)) <= 10)
+           or (azimuth_diff | float(90) < azimuth_toleranz | float(45)) %}
+        {{ kos_einfall > 0.05 and az_ok and (sun_elevation | float(-90) > 2) }}
       ist_zu_warm: >
         {{ states(temperatursensor) | float(-99) > temperatur_schwelle | float(24) }}
       sonne_tief: "{{ sun_elevation | float(-90) < sonnenhoehe_schwelle | float(12) }}"
