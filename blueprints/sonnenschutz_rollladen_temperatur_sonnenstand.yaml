@@ -11,7 +11,7 @@ blueprint:
     - Sonne über Höhen-Schwelle UND nach Öffnungszeit: komplett öffnen (morgens / keine Hitze),
       aber nur wenn der Behang noch auf Nacht- oder Schutzposition steht (manuelle Positionen bleiben unangetastet)
 
-    Version: 2026-10-13.2
+    Version: 2026-10-13.3
 
     Hinweis: Pro Himmelsrichtung eine Automation aus diesem Blueprint anlegen,
     da alle Rollläden einer Automation dieselbe Ausrichtung teilen.
@@ -84,6 +84,21 @@ blueprint:
           step: 1
           unit_of_measurement: "°"
           mode: slider
+    umgebungs_abschattung:
+      name: Umgebungs-Abschattung (Horizonthöhe)
+      description: >
+        Mindest-Sonnenhöhe in Grad, ab der direkte Sonne das Fenster überhaupt
+        erreichen kann. Liegt die Sonne tiefer, wird Verschattung durch die Umgebung
+        angenommen (Bäume, Häuser, Berge) und kein Sonnenschutz ausgelöst.
+        Beispiel: 15, wenn Nachbarhäuser die tiefe Sonne verdecken.
+      default: 2
+      selector:
+        number:
+          min: 0
+          max: 40
+          step: 0.5
+          unit_of_measurement: "°"
+          mode: slider
     schutzposition:
       name: Sonnenschutz-Position
       description: >
@@ -148,6 +163,7 @@ variables:
   fenster_ausrichtung: !input fenster_ausrichtung
   fenster_neigung: !input fenster_neigung
   azimuth_toleranz: !input azimuth_toleranz
+  umgebungs_abschattung: !input umgebungs_abschattung
   schutzposition: !input schutzposition
   positionstoleranz: !input positionstoleranz
   sonnenhoehe_schwelle: !input sonnenhoehe_schwelle
@@ -184,7 +200,7 @@ action:
         {% set kos_einfall = cos(e) * cos(ne) * cos(d) + sin(e) * sin(ne) %}
         {% set az_ok = ((fenster_neigung | float(90)) <= 10)
            or (azimuth_diff | float(90) < azimuth_toleranz | float(45)) %}
-        {{ kos_einfall > 0.05 and az_ok and (sun_elevation | float(-90) > 2) }}
+        {{ kos_einfall > 0.05 and az_ok and (sun_elevation | float(-90) > umgebungs_abschattung | float(2)) }}
       ist_zu_warm: >
         {{ states(temperatursensor) | float(-99) > temperatur_schwelle | float(24) }}
       sonne_tief: "{{ sun_elevation | float(-90) < sonnenhoehe_schwelle | float(12) }}"
