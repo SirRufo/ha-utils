@@ -1,0 +1,178 @@
+blueprint:
+  name: Dynamischer Sonnenschutz für Rollläden
+  description: >
+    Fährt Rollläden herunter, wenn die Sonne direkt auf das Fenster scheint
+    (Prüfung über Fenster-Ausrichtung + Toleranz und Sonnen-Azimut)
+    UND ein Temperatursensor einen Schwellwert überschreitet (innen zu warm).
+
+    - Tagsüber bei Sonne + Hitze: Fahre auf einstellbare Schutzposition
+    - Sonne unter Höhen-Schwelle ODER nach Schließzeit: komplett schließen (Abendschutz / Sichtschutz)
+    - Sonne über Höhen-Schwelle UND nach Öffnungszeit: komplett öffnen (morgens / keine Hitze)
+
+    Hinweis: Pro Himmelsrichtung eine Automation aus diesem Blueprint anlegen,
+    da alle Rollläden einer Automation dieselbe Ausrichtung teilen.
+  domain: automation
+  input:
+    rolllaeden:
+      name: Rollläden
+      description: Zu steuernde Rollläden / Covers (alle mit gleicher Fenster-Ausrichtung).
+      selector:
+        target:
+          entity:
+            - domain: cover
+    temperatursensor:
+      name: Temperatursensor (innen)
+      description: Innentemperatur. Überschreitet sie die Schwelle, wird Sonnenschutz aktiv.
+      selector:
+        entity:
+          filter:
+            - device_class: temperature
+              domain: sensor
+    temperatur_schwelle:
+      name: Temperatur-Schwellwert
+      description: Ab dieser Innentemperatur (°C) wird bei Sonne auf Schutzposition gefahren.
+      default: 24
+      selector:
+        number:
+          min: 18
+          max: 30
+          step: 0.5
+          unit_of_measurement: "°C"
+          mode: slider
+    fenster_ausrichtung:
+      name: Fenster-Ausrichtung (Azimut)
+      description: >
+        Himmelsrichtung, in die das Fenster zeigt (Azimut in Grad):
+        0 = Nord, 90 = Ost, 180 = Süd, 270 = West.
+        Für Dachfenster mit Neigung: Horizontale Projektion der Scheibennormalen angeben.
+      default: 180
+      selector:
+        number:
+          min: 0
+          max: 360
+          step: 1
+          unit_of_measurement: "°"
+          mode: slider
+    azimuth_toleranz:
+      name: Azimut-Toleranz
+      description: >
+        Wie weit darf der Sonnen-Azimut von der Fenster-Ausrichtung abweichen,
+        damit noch von direkter Sonne ausgegangen wird (± Grad).
+      default: 45
+      selector:
+        number:
+          min: 10
+          max: 90
+          step: 1
+          unit_of_measurement: "°"
+          mode: slider
+    schutzposition:
+      name: Sonnenschutz-Position
+      description: >
+        Position für Sonnenschutz (100 = offen, 0 = geschlossen).
+        Typisch: 15–40 für Behang mit Lichtschlitzen.
+      default: 25
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 1
+          unit_of_measurement: "%"
+          mode: slider
+    sonnenhoehe_schwelle:
+      name: Sonnenhöhen-Schwelle (Elevation)
+      description: >
+        Sonnenhöhe in Grad. Darunter = tiefe Sonne / Abend -> komplett schließen.
+        Darüber + nach Öffnungszeit -> öffnen (wenn kein Hitzeschutz nötig).
+      default: 12
+      selector:
+        number:
+          min: 0
+          max: 40
+          step: 0.5
+          unit_of_measurement: "°"
+          mode: slider
+    oeffnungszeit:
+      name: Früheste Öffnungszeit
+      description: Vor dieser Uhrzeit wird morgens nicht geöffnet.
+      default: "07:00:00"
+      selector:
+        time: {}
+    schliesszeit:
+      name: Späteste Zeit für Abend-Schließung
+      description: Ab dieser Uhrzeit werden die Rollläden immer geschlossen, egal wie hoch die Sonne steht.
+      default: "21:00:00"
+      selector:
+        time: {}
+
+mode: restart
+max_exceeded: silent
+
+variables:
+  temperatursensor: !input temperatursensor
+  temperatur_schwelle: !input temperatur_schwelle
+  fenster_ausrichtung: !input fenster_ausrichtung
+  azimuth_toleranz: !input azimuth_toleranz
+  schutzposition: !input schutzposition
+  sonnenhoehe_schwelle: !input sonnenhoehe_schwelle
+  oeffnungszeit: !input oeffnungszeit
+  schliesszeit: !input schliesszeit
+
+trigger:
+  - platform: state
+    entity_id: sun.sun
+  - platform: state
+    entity_id: !input temperatursensor
+  - platform: time_pattern
+    minutes: /5
+  - platform: time
+    at: !input oeffnungszeit
+  - platform: time
+    at: !input schliesszeit
+
+condition: []
+
+action:
+  - variables:
+      sun_elevation: "{{ state_attr('sun.sun', 'elevation') | float(-90) }}"
+      sun_azimuth: "{{ state_attr('sun.sun', 'azimuth') | float(0) }}"
+      azimuth_diff: "{{ (((sun_azimuth | float(0) - fenster_ausrichtung | float(180) + 540) % 360) - 180) | abs }}"
+      sonne_auf_fenster: >
+        {{ azimuth_diff | float(90) < azimuth_toleranz | float(45)
+           and sun_elevation | float(-90) > 2 }}
+      ist_zu_warm: >
+        {{ states(temperatursensor) | float(-99) > temperatur_schwelle | float(24) }}
+      sonne_tief: "{{ sun_elevation | float(-90) < sonnenhoehe_schwelle | float(12) }}"
+      sonne_hoch: "{{ sun_elevation | float(-90) >= sonnenhoehe_schwelle | float(12) }}"
+      nach_oeffnung: "{{ now() >= today_at(oeffnungszeit) }}"
+      nach_schliessung: "{{ now() >= today_at(schliesszeit) }}"
+      im_tagfenster: "{{ nach_oeffnung and not nach_schliessung }}"
+  - choose:
+      # 1. Abend / Nacht: tiefstehende Sonne ODER nach Schließzeit -> komplett zu
+      - conditions:
+          - condition: or
+            conditions:
+              - condition: template
+                value_template: "{{ sonne_tief }}"
+              - condition: template
+                value_template: "{{ nach_schliessung }}"
+        sequence:
+          - service: cover.close_cover
+            target: !input rolllaeden
+      # 2. Sonnenschutz: Sonne auf Fenster + zu warm + hoch genug + im Zeitfenster -> Schutzposition
+      - conditions:
+          - condition: template
+            value_template: "{{ sonne_auf_fenster and ist_zu_warm and sonne_hoch and im_tagfenster }}"
+        sequence:
+          - service: cover.set_cover_position
+            target: !input rolllaeden
+            data:
+              position: !input schutzposition
+      # 3. Morgen / Normal: Sonne hoch + nach Öffnung + im Zeitfenster -> auf (kein Hitzeschutz nötig)
+      - conditions:
+          - condition: template
+            value_template: "{{ sonne_hoch and nach_oeffnung and im_tagfenster }}"
+        sequence:
+          - service: cover.open_cover
+            target: !input rolllaeden
+    default: []
