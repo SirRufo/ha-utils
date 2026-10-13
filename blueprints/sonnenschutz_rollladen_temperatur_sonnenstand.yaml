@@ -14,7 +14,7 @@ blueprint:
       hochfahren, Abend-Schließung und Sonnenschutz fahren dann nie darunter.
       Per Schalter Minimalschließung abschaltbar (Kontakt wird dann ignoriert).
 
-    Version: 2026-10-13.6
+    Version: 2026-10-13.7
 
     Hinweis: Pro Himmelsrichtung eine Automation aus diesem Blueprint anlegen,
     da alle Rollläden einer Automation dieselbe Ausrichtung teilen.
@@ -108,8 +108,7 @@ blueprint:
         Öffnungssensor (Fenstergriff / Reedkontakt, on = offen). Pflichtfeld.
         Wirkt nur, wenn die Minimalschließung aktiviert ist: Solange das Fenster
         offen ist, fahren die Rollläden mindestens auf Lüftungsposition hoch und
-        die Abend-Schließung wird ausgesetzt. Reaktion spätestens im nächsten
-        5-Minuten-Takt.
+        die Abend-Schließung wird ausgesetzt. Löst bei jeder Statusänderung sofort aus.
       selector:
         entity:
           filter:
@@ -220,6 +219,8 @@ trigger:
     entity_id: sun.sun
   - platform: state
     entity_id: !input temperatursensor
+  - platform: state
+    entity_id: !input fensterkontakt
   - platform: time_pattern
     minutes: /5
   - platform: time
