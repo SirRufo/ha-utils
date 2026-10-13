@@ -11,7 +11,7 @@ blueprint:
     - Sonne über Höhen-Schwelle UND nach Öffnungszeit: komplett öffnen (morgens / keine Hitze),
       aber nur wenn der Behang noch auf Nacht- oder Schutzposition steht (manuelle Positionen bleiben unangetastet)
 
-    Version 2026-10-13
+    Version: 2026-10-13.1
 
     Hinweis: Pro Himmelsrichtung eine Automation aus diesem Blueprint anlegen,
     da alle Rollläden einer Automation dieselbe Ausrichtung teilen.
