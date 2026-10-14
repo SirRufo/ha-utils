@@ -11,11 +11,13 @@ blueprint:
 
     Einrichtung:
     1. Helfer anlegen (Einstellungen -> Geräte & Dienste -> Helfer -> Nummer):
-       Minimum -100000, Maximum 100000, Schrittweite 0.01, Einheit EUR, Anfangswert 0.
+       Minimum -100000, Maximum 100000, Schrittweite 0.000001, Einheit EUR,
+       Anzeigegenauigkeit 6, Anfangswert 0. Die 6 Nachkommastellen sind nötig,
+       da Zähler-Updates von z. B. 0,01 kWh nur Cent-Bruchteile ergeben.
     2. Automation aus diesem Blueprint anlegen und Strompreis-Sensor, Ladezähler,
        Entladezähler sowie den Helfer als Ersparnis-Konto auswählen.
 
-    Version: 2026-10-14
+    Version: 2026-10-14.1
 
     Hinweis: Tages-, Monats- und Jahressummen entstehen automatisch über die
     Langzeitstatistiken des Helfers, z. B. für das Energie-Dashboard.
@@ -112,7 +114,7 @@ action:
             target:
               entity_id: !input ersparnis_konto
             data:
-              value: "{{ (bisher - delta * preis) | round(2) }}"
+              value: "{{ (bisher - delta * preis) | round(6) }}"
       - conditions:
           - condition: template
             value_template: "{{ trigger.entity_id == akku_entladen }}"
@@ -121,5 +123,5 @@ action:
             target:
               entity_id: !input ersparnis_konto
             data:
-              value: "{{ (bisher + delta * preis) | round(2) }}"
+              value: "{{ (bisher + delta * preis) | round(6) }}"
     default: []

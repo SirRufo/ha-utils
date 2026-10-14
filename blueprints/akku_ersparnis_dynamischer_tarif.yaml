@@ -22,7 +22,7 @@ blueprint:
             akku_geladen: sensor.akku_geladen_gesamt
             akku_entladen: sensor.akku_entladen_gesamt
 
-    Version: 2026-10-14.1
+    Version: 2026-10-14.2
 
     Hinweis: Tages-, Monats- und Jahressummen entstehen automatisch über die
     Langzeitstatistiken (state_class total), z. B. für das Energie-Dashboard.
@@ -89,7 +89,7 @@ sensor:
   device_class: monetary
   unit_of_measurement: EUR
   state_class: total
-  suggested_display_precision: 2
+  suggested_display_precision: 6
   state: >
     {% set neu = trigger.to_state.state | float(none) %}
     {% set alt = trigger.from_state.state | float(none) if trigger.from_state is not none else none %}
@@ -101,9 +101,9 @@ sensor:
       {% if delta < 0 %}{% set delta = 0 %}{% endif %}
       {% set bisher = this.state | float(0) %}
       {% if trigger.entity_id == akku_geladen %}
-        {{ (bisher - delta * preis) | round(2) }}
+        {{ (bisher - delta * preis) | round(6) }}
       {% else %}
-        {{ (bisher + delta * preis) | round(2) }}
+        {{ (bisher + delta * preis) | round(6) }}
       {% endif %}
     {% endif %}
   attributes:
