@@ -1,0 +1,112 @@
+blueprint:
+  name: Akku-Ersparnis mit dynamischem Stromtarif
+  description: >
+    Berechnet die laufende Ersparnis eines Heimspeichers (Akku) bei dynamischem Stromtarif
+    als Geld-Sensor (EUR) - für reinen Netzbetrieb ohne PV-Anlage.
+
+    Modell: Der Akku lädt aus dem Netz (Kosten += geladene kWh × Preis beim Laden)
+    und entlädt für den Haushalt (Wert += entladene kWh × Preis beim Entladen).
+    Ersparnis = Entladewert − Ladekosten. Lade-/Entladeverluste und Eigenverbrauch
+    stecken implizit in der Differenz (mehr geladen als entladen).
+
+    Verwendung in der configuration.yaml (Template-Blueprints werden per use_blueprint
+    eingebunden, Name und unique_id werden an der Verwendungsstelle vergeben -
+    unique_id ist Pflicht, damit der Zählerstand Neustarts überlebt und Statistiken
+    entstehen):
+
+    template:
+      - use_blueprint:
+          path: <autor>/akku_ersparnis_dynamischer_tarif.yaml
+          input:
+            strompreis: sensor.strompreis_aktuell
+            akku_geladen: sensor.akku_geladen_gesamt
+            akku_entladen: sensor.akku_entladen_gesamt
+
+    Version: 2026-10-14.1
+
+    Hinweis: Tages-, Monats- und Jahressummen entstehen automatisch über die
+    Langzeitstatistiken (state_class total), z. B. für das Energie-Dashboard.
+  domain: template
+  source_url: https://github.com/SirRufo/ha-utils/blob/main/blueprints/akku_ersparnis_dynamischer_tarif.yaml
+  input:
+    strompreis:
+      name: Dynamischer Strompreis
+      description: >
+        Aktueller Bezugspreis in EUR/kWh (z. B. Tibber-Sensor). Wird zum Zeitpunkt
+        jeder Entladung für die Bewertung herangezogen.
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: monetary
+    akku_geladen:
+      name: Akku-Ladung (Energiezähler)
+      description: >
+        Zähler der gesamt in den Akku geladenen Energie in kWh (steigend;
+        Tageszähler mit Mitternachts-Reset funktionieren ebenfalls).
+        Wird mit dem Preis beim Laden als Kosten bewertet.
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: energy
+    akku_entladen:
+      name: Akku-Entladung (Energiezähler)
+      description: >
+        Zähler der gesamt aus dem Akku entladenen Energie in kWh (steigend;
+        Tageszähler mit Mitternachts-Reset funktionieren ebenfalls).
+        Wird mit dem Preis beim Entladen als Wert bewertet.
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: energy
+
+variables:
+  strompreis: !input strompreis
+  akku_geladen: !input akku_geladen
+  akku_entladen: !input akku_entladen
+
+triggers:
+  - trigger: state
+    entity_id: !input akku_geladen
+    not_to:
+      - unknown
+      - unavailable
+    not_from:
+      - unknown
+      - unavailable
+  - trigger: state
+    entity_id: !input akku_entladen
+    not_to:
+      - unknown
+      - unavailable
+    not_from:
+      - unknown
+      - unavailable
+
+sensor:
+  device_class: monetary
+  unit_of_measurement: EUR
+  state_class: total
+  suggested_display_precision: 2
+  state: >
+    {% set neu = trigger.to_state.state | float(none) %}
+    {% set alt = trigger.from_state.state | float(none) if trigger.from_state is not none else none %}
+    {% set preis = states(strompreis) | float(none) %}
+    {% if neu is none or alt is none or preis is none %}
+      {{ this.state }}
+    {% else %}
+      {% set delta = neu - alt %}
+      {% if delta < 0 %}{% set delta = 0 %}{% endif %}
+      {% set bisher = this.state | float(0) %}
+      {% if trigger.entity_id == akku_geladen %}
+        {{ (bisher - delta * preis) | round(2) }}
+      {% else %}
+        {{ (bisher + delta * preis) | round(2) }}
+      {% endif %}
+    {% endif %}
+  attributes:
+    ladung_gesamt_kwh: "{{ states(akku_geladen) | float(none) }}"
+    entladung_gesamt_kwh: "{{ states(akku_entladen) | float(none) }}"
+    strompreis_eur_kwh: "{{ states(strompreis) | float(none) }}"
