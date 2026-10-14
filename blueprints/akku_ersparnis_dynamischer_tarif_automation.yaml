@@ -1,0 +1,125 @@
+blueprint:
+  name: Akku-Ersparnis mit dynamischem Stromtarif (Automation)
+  description: >
+    Führt ein Ersparnis-Konto für einen Heimspeicher (Akku) bei dynamischem Stromtarif -
+    für reinen Netzbetrieb ohne PV-Anlage. Komplett per UI einrichtbar.
+
+    Modell: Der Akku lädt aus dem Netz (Kosten += geladene kWh × Preis beim Laden)
+    und entlädt für den Haushalt (Wert += entladene kWh × Preis beim Entladen).
+    Ersparnis = Entladewert − Ladekosten. Lade-/Entladeverluste und Eigenverbrauch
+    stecken implizit in der Differenz (mehr geladen als entladen).
+
+    Einrichtung:
+    1. Helfer anlegen (Einstellungen -> Geräte & Dienste -> Helfer -> Nummer):
+       Minimum -100000, Maximum 100000, Schrittweite 0.01, Einheit EUR, Anfangswert 0.
+    2. Automation aus diesem Blueprint anlegen und Strompreis-Sensor, Ladezähler,
+       Entladezähler sowie den Helfer als Ersparnis-Konto auswählen.
+
+    Version: 2026-10-14
+
+    Hinweis: Tages-, Monats- und Jahressummen entstehen automatisch über die
+    Langzeitstatistiken des Helfers, z. B. für das Energie-Dashboard.
+  domain: automation
+  source_url: https://github.com/SirRufo/ha-utils/blob/main/blueprints/akku_ersparnis_dynamischer_tarif_automation.yaml
+  input:
+    strompreis:
+      name: Dynamischer Strompreis
+      description: >
+        Aktueller Bezugspreis in EUR/kWh (z. B. Tibber-Sensor). Wird zum Zeitpunkt
+        jeder Ladung bzw. Entladung für die Bewertung herangezogen.
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: monetary
+    akku_geladen:
+      name: Akku-Ladung (Energiezähler)
+      description: >
+        Zähler der gesamt in den Akku geladenen Energie in kWh (steigend;
+        Tageszähler mit Mitternachts-Reset funktionieren ebenfalls).
+        Wird mit dem Preis beim Laden als Kosten bewertet.
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: energy
+    akku_entladen:
+      name: Akku-Entladung (Energiezähler)
+      description: >
+        Zähler der gesamt aus dem Akku entladenen Energie in kWh (steigend;
+        Tageszähler mit Mitternachts-Reset funktionieren ebenfalls).
+        Wird mit dem Preis beim Entladen als Wert bewertet.
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: energy
+    ersparnis_konto:
+      name: Ersparnis-Konto (Nummer-Helfer)
+      description: >
+        input_number-Helfer in EUR, auf den die Ersparnis aufaddiert wird
+        (siehe Einrichtung in der Beschreibung).
+      selector:
+        entity:
+          filter:
+            - domain: input_number
+
+mode: queued
+max_exceeded: silent
+
+variables:
+  strompreis: !input strompreis
+  akku_geladen: !input akku_geladen
+  akku_entladen: !input akku_entladen
+  ersparnis_konto: !input ersparnis_konto
+
+trigger:
+  - platform: state
+    entity_id: !input akku_geladen
+    not_to:
+      - unknown
+      - unavailable
+    not_from:
+      - unknown
+      - unavailable
+  - platform: state
+    entity_id: !input akku_entladen
+    not_to:
+      - unknown
+      - unavailable
+    not_from:
+      - unknown
+      - unavailable
+
+condition: []
+
+action:
+  - variables:
+      neu: "{{ trigger.to_state.state | float(none) }}"
+      alt: "{{ trigger.from_state.state | float(none) if trigger.from_state is not none else none }}"
+      preis: "{{ states(strompreis) | float(none) }}"
+      bisher: "{{ states(ersparnis_konto) | float(none) }}"
+  - condition: template
+    value_template: "{{ neu is not none and alt is not none and preis is not none and bisher is not none }}"
+  - variables:
+      delta: "{{ [neu - alt, 0] | max }}"
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.entity_id == akku_geladen }}"
+        sequence:
+          - service: input_number.set_value
+            target:
+              entity_id: !input ersparnis_konto
+            data:
+              value: "{{ (bisher - delta * preis) | round(2) }}"
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.entity_id == akku_entladen }}"
+        sequence:
+          - service: input_number.set_value
+            target:
+              entity_id: !input ersparnis_konto
+            data:
+              value: "{{ (bisher + delta * preis) | round(2) }}"
+    default: []
