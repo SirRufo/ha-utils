@@ -45,7 +45,7 @@ blueprint:
     will, nutzt stattdessen Omnibattery Dynamic Pricing (Tibber) mit
     Mindest-Arbitrage-Marge.
 
-    Version: 2026-10-16.9
+    Version: 2026-10-16.10
   domain: automation
   source_url: https://github.com/SirRufo/ha-utils/blob/main/blueprints/tibber_ladeplanung_omnibattery.yaml
   input:
@@ -364,6 +364,7 @@ action:
                 {% set plan.window = [t0, t1, limit, d, (margin | round(1)), (buy | round(4)), (sell | round(4)), eff] %}
                 {% endif %}{% endif %}
                 {% endif %}{% endfor %}
+                {% endif %}
                 {% endif %}
                 {{ {'window': plan.window, 'full': plan.full} | to_json }}
           - variables:
