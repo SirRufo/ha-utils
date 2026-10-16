@@ -17,7 +17,8 @@ blueprint:
        max. 1,2 kW, Slotdauer aus den Preisdaten). Geladen wird nur,
        wenn (Abendpreis × Wirkungsgrad − Kaufpreis) / Kaufpreis über der
        Mindestmarge liegt. Der Plan landet in den Helfern und als
-       Benachrichtigung im Postfach.
+       laufend aktualisierter Dauer-Benachrichtigung (Lade- und
+       Entladefenster) im Postfach.
 
     2. Volladung: Ab 7 Tagen seit der letzten Volladung wird angestrebt, einmal
        auf 100 % zu laden, sobald der billigste Slot im Horizont unter der
@@ -49,7 +50,7 @@ blueprint:
     will, nutzt stattdessen Omnibattery Dynamic Pricing (Tibber) mit
     Mindest-Arbitrage-Marge.
 
-    Version: 2026-10-16.12
+    Version: 2026-10-16.13
   domain: automation
   source_url: https://github.com/SirRufo/ha-utils/blob/main/blueprints/tibber_ladeplanung_omnibattery.yaml
   input:
@@ -365,7 +366,10 @@ action:
                 {% set t0 = (starts | min | replace('T', ' '))[0:19] %}
                 {% set t1 = (as_datetime(starts | max) + timedelta(hours=slot_h)).strftime('%Y-%m-%d %H:%M:%S') %}
                 {% set limit = ((cheap | map(attribute='price') | max) + 0.02) | round(4) %}
-                {% set plan.window = [t0, t1, limit, d, (margin | round(1)), (buy | round(4)), (sell | round(4)), eff] %}
+                {% set pstarts = peak_items | map(attribute='start_time') | list %}
+                {% set p0 = (pstarts | min | replace('T', ' '))[0:19] %}
+                {% set p1 = (as_datetime(pstarts | max) + timedelta(hours=slot_h)).strftime('%Y-%m-%d %H:%M:%S') %}
+                {% set plan.window = [t0, t1, limit, d, (margin | round(1)), (buy | round(4)), (sell | round(4)), eff, p0, p1] %}
                 {% endif %}{% endif %}
                 {% endif %}{% endfor %}
                 {% endif %}
@@ -380,7 +384,7 @@ action:
           - choose:
               - conditions:
                   - condition: template
-                    value_template: "{{ plan_window | length == 8 }}"
+                    value_template: "{{ plan_window | length == 10 }}"
                 sequence:
                   - service: input_datetime.set_datetime
                     target:
@@ -400,10 +404,13 @@ action:
                   - service: persistent_notification.create
                     data:
                       title: Akku-Ladeplanung
+                      notification_id: akku_ladeplanung
                       message: >
-                        Neuer Plan für {{ plan_window[3] }}{{ ' (Volladung)' if plan_full else '' }}:
+                        Aktueller Plan für {{ plan_window[3] }}{{ ' (Volladung)' if plan_full else '' }}:
                         Laden {{ plan_window[0][11:16] }}–{{ plan_window[1][11:16] }}
-                        Uhr, Limit {{ plan_window[2] }} EUR/kWh,
+                        Uhr (Limit {{ plan_window[2] }} EUR/kWh),
+                        Entladen in der Spitze {{ plan_window[8][11:16] }}–{{ plan_window[9][11:16] }}
+                        Uhr (KI),
                         Kauf {{ plan_window[5] }}, Spitze {{ plan_window[6] }},
                         Marge {{ plan_window[4] }} %.
             default:
@@ -425,6 +432,7 @@ action:
               - service: persistent_notification.create
                 data:
                   title: Akku-Ladeplanung
+                  notification_id: akku_ladeplanung
                   message: Kein Ladefenster mit ausreichender Marge gefunden.
   - variables:
       soc_now: "{{ states(soc_sensor) | float(50) }}"
