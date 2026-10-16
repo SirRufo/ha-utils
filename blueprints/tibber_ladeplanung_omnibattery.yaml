@@ -49,7 +49,7 @@ blueprint:
     will, nutzt stattdessen Omnibattery Dynamic Pricing (Tibber) mit
     Mindest-Arbitrage-Marge.
 
-    Version: 2026-10-16.11
+    Version: 2026-10-16.12
   domain: automation
   source_url: https://github.com/SirRufo/ha-utils/blob/main/blueprints/tibber_ladeplanung_omnibattery.yaml
   input:
@@ -435,7 +435,7 @@ action:
         {{ states(helper_start) not in ['unknown', 'unavailable', '']
            and states(helper_end) not in ['unknown', 'unavailable', '']
            and ' ' in states(helper_start) and ' ' in states(helper_end)
-           and as_datetime(states(helper_start)) <= now() <= as_datetime(states(helper_end)) }}
+           and as_timestamp(states(helper_start)) <= as_timestamp(now()) <= as_timestamp(states(helper_end)) }}
       need_soc: "{{ (states(soc_sensor) | float(50)) < (100 if is_state(helper_full_flag, 'on') else (max_soc | float(90))) - 2 }}"
       price_ok: "{{ (states(price_sensor) | float(999)) <= (states(helper_buy_limit) | float(999)) }}"
       min_limit: "{{ min_soc | float(20) }}"
