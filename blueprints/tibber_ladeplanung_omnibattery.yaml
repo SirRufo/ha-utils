@@ -1,6 +1,6 @@
 blueprint:
   name: Tibber-Ladeplanung für Omnibattery (Laden per Plan, Entladen per KI)
-  description: >
+  description: |
     Erstellt aus Tibber-Preisen (Aktion `tibber.get_prices`) ein optimiertes
     Ladefenster und steuert nur das LADEN des Marstek Venus A (mit
     Erweiterungsmodul). Das ENTLADEN bleibt beim KI-Modus der Batterie:
@@ -8,6 +8,7 @@ blueprint:
     frei, sodass die Batterie-KI wieder übernimmt.
 
     Ablauf:
+
     1. Planung (00:05, 13:05 Uhr, stündlich, bei Neustart): Holt heute plus
        morgen per `tibber.get_prices` (Morgenpreise kommen ca. 13 Uhr). Die
        Abendspitze wird dynamisch als teuerstes zusammenhängendes Fenster
@@ -17,12 +18,14 @@ blueprint:
        wenn (Abendpreis × Wirkungsgrad − Kaufpreis) / Kaufpreis über der
        Mindestmarge liegt. Der Plan landet in den Helfern und als
        Benachrichtigung im Postfach.
+
     2. Volladung: Ab 7 Tagen seit der letzten Volladung wird angestrebt, einmal
        auf 100 % zu laden, sobald der billigste Slot im Horizont unter der
        Günstig-Schwelle liegt. Spätestens nach Anstreben plus Offset
        (Standard 7 + 10 Tage) wird erzwungen (dann im billigsten Fenster
        des Tages). Eine erkannte Volladung (SoC ≥ 99 %)
        setzt den Zähler zurück.
+
     3. Steuerung (alle 5 Min.): Im Fenster und SoC unter Ziel (Max-SoC bzw.
        100 % bei Volladung) wird Battery Manual Mode eingeschaltet und 1200 W
        Ladeleistung gesetzt. Sonst wird Manual Mode ausgeschaltet (= KI
@@ -30,7 +33,8 @@ blueprint:
        per Allow-Discharge-Schalter gesperrt (mit 5 % Hysterese), damit die
        Reserve erhalten bleibt.
 
-    Benötigte Helfer (Einstellungen -> Geräte & Dienste -> Helfer):
+    Benötigte Helfer (Einstellungen → Geräte & Dienste → Helfer):
+
     - 2× Datum/Uhrzeit MIT Datum und Uhrzeit: Ladefenster-Start, Ladefenster-Ende
       (wichtig: beide Häkchen setzen, sonst lädt die Steuerung nie)
     - 1× Nummer: Kaufpreis-Limit in EUR/kWh (Schritt 0,005)
@@ -45,7 +49,7 @@ blueprint:
     will, nutzt stattdessen Omnibattery Dynamic Pricing (Tibber) mit
     Mindest-Arbitrage-Marge.
 
-    Version: 2026-10-16.10
+    Version: 2026-10-16.11
   domain: automation
   source_url: https://github.com/SirRufo/ha-utils/blob/main/blueprints/tibber_ladeplanung_omnibattery.yaml
   input:
