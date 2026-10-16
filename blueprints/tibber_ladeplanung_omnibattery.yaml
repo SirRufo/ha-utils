@@ -1,0 +1,483 @@
+blueprint:
+  name: Tibber-Ladeplanung für Omnibattery (Laden per Plan, Entladen per KI)
+  description: >
+    Erstellt aus Tibber-Preisen (Aktion `tibber.get_prices`) ein optimiertes
+    Ladefenster und steuert nur das LADEN des Marstek Venus A (mit
+    Erweiterungsmodul). Das ENTLADEN bleibt beim KI-Modus der Batterie:
+    außerhalb des Ladefensters gibt die Automation die manuelle Kontrolle
+    frei, sodass die Batterie-KI wieder übernimmt.
+
+    Ablauf:
+    1. Planung (00:05, 13:05 Uhr, stündlich, bei Neustart): Holt heute plus
+       morgen per `tibber.get_prices` (Morgenpreise kommen ca. 13 Uhr). Die
+       Abendspitze wird dynamisch als teuerstes zusammenhängendes Fenster
+       zwischen 12 und 24 Uhr erkannt. Aus den Slots davor werden die N billigsten für
+       die fehlende Energie gewählt (Ziel-SoC − Ist-SoC mal Sensorkapazität,
+       max. 1,2 kW, Slotdauer aus den Preisdaten). Geladen wird nur,
+       wenn (Abendpreis × Wirkungsgrad − Kaufpreis) / Kaufpreis über der
+       Mindestmarge liegt. Der Plan landet in den Helfern und als
+       Benachrichtigung im Postfach.
+    2. Volladung: Ab 7 Tagen seit der letzten Volladung wird angestrebt, einmal
+       auf 100 % zu laden, sobald der billigste Slot im Horizont unter der
+       Günstig-Schwelle liegt. Spätestens nach Anstreben plus Offset
+       (Standard 7 + 10 Tage) wird erzwungen (dann im billigsten Fenster
+       des Tages). Eine erkannte Volladung (SoC ≥ 99 %)
+       setzt den Zähler zurück.
+    3. Steuerung (alle 5 Min.): Im Fenster und SoC unter Ziel (Max-SoC bzw.
+       100 % bei Volladung) wird Battery Manual Mode eingeschaltet und 1200 W
+       Ladeleistung gesetzt. Sonst wird Manual Mode ausgeschaltet (= KI
+       übernimmt). Fällt der SoC auf Min-SoC, wird zusätzlich die Entladung
+       per Allow-Discharge-Schalter gesperrt (mit 5 % Hysterese), damit die
+       Reserve erhalten bleibt.
+
+    Benötigte Helfer (Einstellungen -> Geräte & Dienste -> Helfer):
+    - 2× Datum/Uhrzeit MIT Datum und Uhrzeit: Ladefenster-Start, Ladefenster-Ende
+      (wichtig: beide Häkchen setzen, sonst lädt die Steuerung nie)
+    - 1× Nummer: Kaufpreis-Limit in EUR/kWh (Schritt 0,005)
+    - 1× Datum/Uhrzeit NUR Datum: letzte Volladung
+    - 1× Schalter: Volladung aktiv (input_boolean)
+
+    Hinweis: Der Marstek KI-Modus (App) und die Omnibattery-Modbus-Steuerung
+    können nicht gleichzeitig führen. Während des Ladefensters gehört die
+    Batterie dieser Automation (Manual Mode), danach der KI. Die Min-SoC-Sperre
+    wirkt über den Omnibattery-Steuerungspfad; zusätzlich empfiehlt sich die
+    Min-SoC-Grenze in der Marstek-App. Wer das Entladen ebenfalls optimieren
+    will, nutzt stattdessen Omnibattery Dynamic Pricing (Tibber) mit
+    Mindest-Arbitrage-Marge.
+
+    Version: 2026-10-16.9
+  domain: automation
+  source_url: https://github.com/SirRufo/ha-utils/blob/main/blueprints/tibber_ladeplanung_omnibattery.yaml
+  input:
+    price_sensor:
+      name: Aktueller Strompreis
+      description: Aktueller Bezugspreis in EUR/kWh (z. B. Tibber-Sensor).
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: monetary
+    tibber_home:
+      name: Tibber-Heim (optional)
+      description: >
+        Name des Heims aus der `tibber.get_prices`-Antwort (Schlüssel unter
+        `prices`). Leer lassen = erstes Heim nehmen.
+      default: ""
+      selector:
+        text:
+    soc_sensor:
+      name: Batterie-SoC
+      description: Ladezustand in % (z. B. sensor.marstek_venus_1_battery_soc).
+      default: sensor.marstek_venus_1_battery_soc
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+    manual_switch:
+      name: Battery Manual Mode
+      description: Omnibattery-Schalter für manuelle Kontrolle dieser Batterie.
+      default: switch.marstek_venus_1_battery_manual_mode
+      selector:
+        entity:
+          filter:
+            - domain: switch
+    charge_power_number:
+      name: Ladeleistung (Setpoint)
+      description: Omnibattery-Number für die Ladeleistung in W.
+      default: number.marstek_venus_1_set_charge_power
+      selector:
+        entity:
+          filter:
+            - domain: number
+    allow_discharge_switch:
+      name: Allow Discharge
+      description: Omnibattery-Schalter für die Entladefreigabe dieser Batterie.
+      default: switch.marstek_venus_1_battery_allow_discharge
+      selector:
+        entity:
+          filter:
+            - domain: switch
+    helper_start:
+      name: Helfer Ladefenster-Start
+      description: input_datetime-Helfer MIT Datum und Uhrzeit für den Ladebeginn.
+      selector:
+        entity:
+          filter:
+            - domain: input_datetime
+    helper_end:
+      name: Helfer Ladefenster-Ende
+      description: input_datetime-Helfer MIT Datum und Uhrzeit für das Ladeende.
+      selector:
+        entity:
+          filter:
+            - domain: input_datetime
+    helper_buy_limit:
+      name: Helfer Kaufpreis-Limit
+      description: >
+        input_number-Helfer in EUR/kWh. Die Planung schreibt hier den teuersten
+        Slotpreis des Ladefensters plus 2 ct Toleranz hinein. Die Steuerung
+        lädt nur, solange der aktuelle Preis darunter liegt.
+      selector:
+        entity:
+          filter:
+            - domain: input_number
+    helper_last_full:
+      name: Helfer letzte Volladung
+      description: input_datetime-Helfer NUR mit Datum für die letzte Volladung.
+      selector:
+        entity:
+          filter:
+            - domain: input_datetime
+    helper_full_flag:
+      name: Helfer Volladung aktiv
+      description: input_boolean-Helfer, markiert eine anstehende Volladung.
+      selector:
+        entity:
+          filter:
+            - domain: input_boolean
+    capacity_sensor:
+      name: Batteriekapazität
+      description: Sensor mit der Bruttokapazität in kWh (z. B. Venus A + Modul = 4,24).
+      default: sensor.marstek_venus_1_battery_total_energy
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: energy
+    max_charge_w:
+      name: Max. Ladeleistung (W)
+      default: 1200
+      selector:
+        number:
+          min: 100
+          max: 1500
+          step: 50
+          unit_of_measurement: W
+          mode: box
+    efficiency_pct:
+      name: Roundtrip-Wirkungsgrad (%)
+      description: Gemessen ca. 82,9 % (AC zu AC).
+      default: 82.9
+      selector:
+        number:
+          min: 50
+          max: 100
+          step: 0.1
+          unit_of_measurement: "%"
+          mode: box
+    min_margin_pct:
+      name: Mindestmarge (%)
+      description: >
+        Laden nur wenn (Abendpreis × Wirkungsgrad − Kaufpreis) / Kaufpreis
+        darüber liegt.
+      default: 5
+      selector:
+        number:
+          min: 0
+          max: 50
+          step: 0.5
+          unit_of_measurement: "%"
+          mode: box
+    min_soc:
+      name: Min-SoC (%)
+      description: Bei diesem SoC wird die Entladung gesperrt (Reserve).
+      default: 20
+      selector:
+        number:
+          min: 5
+          max: 50
+          step: 1
+          unit_of_measurement: "%"
+          mode: box
+    max_soc:
+      name: Max-SoC (%)
+      description: Bei diesem SoC endet das normale Laden.
+      default: 90
+      selector:
+        number:
+          min: 50
+          max: 100
+          step: 1
+          unit_of_measurement: "%"
+          mode: box
+    full_from_days:
+      name: Volladung anstreben ab (Tage)
+      description: Ab so vielen Tagen seit letzter Volladung laden, wenn billig.
+      default: 7
+      selector:
+        number:
+          min: 1
+          max: 30
+          step: 1
+          unit_of_measurement: d
+          mode: box
+    full_offset_days:
+      name: Volladung-Offset (Tage)
+      description: Zwang ab Anstreben plus Offset (0–14, Standard 7 + 10 Tage).
+      default: 10
+      selector:
+        number:
+          min: 0
+          max: 14
+          step: 1
+          unit_of_measurement: d
+          mode: box
+    full_cheap_price:
+      name: Günstig-Schwelle Volladung (EUR/kWh)
+      description: Volladung ab der Anstreb-Schwelle, wenn der billigste Slot darunter liegt.
+      default: 0.30
+      selector:
+        number:
+          min: 0.05
+          max: 1.0
+          step: 0.005
+          unit_of_measurement: EUR/kWh
+          mode: box
+    peak_window_hours:
+      name: Dauer des Spitzenfensters (h)
+      description: Fensterlänge für die dynamische Erkennung (Standard 4 h).
+      default: 4
+      selector:
+        number:
+          min: 1
+          max: 8
+          step: 0.25
+          unit_of_measurement: h
+          mode: box
+
+mode: queued
+max_exceeded: silent
+
+variables:
+  price_sensor: !input price_sensor
+  tibber_home: !input tibber_home
+  soc_sensor: !input soc_sensor
+  manual_switch: !input manual_switch
+  charge_power_number: !input charge_power_number
+  allow_discharge_switch: !input allow_discharge_switch
+  helper_start: !input helper_start
+  helper_end: !input helper_end
+  helper_buy_limit: !input helper_buy_limit
+  helper_last_full: !input helper_last_full
+  helper_full_flag: !input helper_full_flag
+  capacity_sensor: !input capacity_sensor
+  max_charge_w: !input max_charge_w
+  efficiency_pct: !input efficiency_pct
+  min_margin_pct: !input min_margin_pct
+  min_soc: !input min_soc
+  max_soc: !input max_soc
+  full_from_days: !input full_from_days
+  full_offset_days: !input full_offset_days
+  full_cheap_price: !input full_cheap_price
+  peak_window_hours: !input peak_window_hours
+
+trigger:
+  - platform: time
+    at: "00:05:00"
+    id: plan
+  - platform: time
+    at: "13:05:00"
+    id: plan
+  - platform: time_pattern
+    hours: "/1"
+    minutes: "5"
+    id: plan
+  - platform: time_pattern
+    minutes: "/5"
+    id: control
+  - platform: state
+    entity_id: !input soc_sensor
+    id: control
+  - platform: homeassistant
+    event: start
+    id: plan
+
+condition: []
+
+action:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: plan
+        sequence:
+          - service: tibber.get_prices
+            data:
+              start: "{{ now().strftime('%Y-%m-%d') }} 00:00:00"
+              end: "{{ (now() + timedelta(days=2)).strftime('%Y-%m-%d') }} 00:00:00"
+            response_variable: tibber_resp
+          - variables:
+              plan_json: >
+                {% set homes = tibber_resp['prices'] if tibber_resp is defined and 'prices' in tibber_resp else {} %}
+                {% set hname = tibber_home | string %}
+                {% set raw = homes[hname] if hname | length > 0 and hname in homes else ((homes.values() | list)[0] if homes | length > 0 else []) %}
+                {% set plan = namespace(window=[], full=false) %}
+                {% if raw is sequence and (raw | length) > 1 %}
+                {% set slot_h = ((as_datetime(raw[1].start_time) - as_datetime(raw[0].start_time)).total_seconds() / 3600) %}
+                {% if slot_h <= 0 %}{% set slot_h = 0.25 %}{% endif %}
+                {% set horizon = namespace(items=[]) %}
+                {% for p in raw %}{% if p.start_time is defined and p.price is defined and as_datetime(p.start_time) >= now() - timedelta(minutes=15) %}{% set horizon.items = horizon.items + [p] %}{% endif %}{% endfor %}
+                {% set dates = namespace(all=[]) %}
+                {% for p in horizon.items %}{% set d = p.start_time[0:10] %}{% if d not in dates.all %}{% set dates.all = dates.all + [d] %}{% endif %}{% endfor %}
+                {% set soc = states(soc_sensor) | float(50) %}
+                {% set last_raw = states(helper_last_full) %}
+                {% set days = namespace(n=99) %}
+                {% if last_raw not in ['unknown', 'unavailable', ''] and '-' in last_raw %}
+                {% set days.n = (as_datetime(now().strftime('%Y-%m-%d')) - as_datetime(last_raw[0:10])).days %}
+                {% endif %}
+                {% set hmin = (horizon.items | map(attribute='price') | min) if horizon.items | length > 0 else 999 %}
+                {% if days.n >= ((full_from_days | int(7)) + (full_offset_days | int(10))) %}{% set plan.full = true %}
+                {% elif days.n >= (full_from_days | int(7)) and hmin <= (full_cheap_price | float(0.30)) %}{% set plan.full = true %}{% endif %}
+                {% set eff = 100 if plan.full else (max_soc | float(90)) %}
+                {% set kapazitaet = states(capacity_sensor) | float(4.24) %}
+                {% set fehlt = [(eff - soc) / 100 * kapazitaet, 0] | max %}
+                {% set pro_slot = (max_charge_w | float(1200)) / 1000 * slot_h %}
+                {% set n = ((fehlt / pro_slot) | round(0, 'ceil')) | int %}
+                {% if n > 0 %}
+                {% set wlen = (((peak_window_hours | float(4)) / slot_h) | round(0)) | int %}
+                {% for d in dates.all | sort %}{% if plan.window | length == 0 %}
+                {% set day = namespace(items=[]) %}
+                {% for p in horizon.items %}{% if p.start_time[0:10] == d %}{% set day.items = day.items + [p] %}{% endif %}{% endfor %}
+                {% set search = namespace(items=[]) %}
+                {% for p in day.items %}{% if p.start_time[11:16] >= '12:00' %}{% set search.items = search.items + [p] %}{% endif %}{% endfor %}
+                {% set best = namespace(avg=-1, idx=0) %}
+                {% for i in range([search.items | length - wlen + 1, 1] | max) %}
+                {% set w = search.items[i:i + wlen] %}
+                {% if w | length == wlen %}
+                {% set a = (w | map(attribute='price') | sum) / wlen %}
+                {% if a > best.avg %}{% set best.avg = a %}{% set best.idx = i %}{% endif %}
+                {% endif %}{% endfor %}
+                {% set peak_items = search.items[best.idx:best.idx + wlen] if best.avg >= 0 else [] %}
+                {% set ps = (peak_items | map(attribute='start_time') | min)[11:16] if peak_items | length > 0 else '99:99' %}
+                {% set before = namespace(items=[]) %}
+                {% for p in day.items %}{% if p.start_time[11:16] <= ps %}{% set before.items = before.items + [p] %}{% endif %}{% endfor %}
+                {% set cheap = (before.items | sort(attribute='price'))[:n] %}
+                {% if cheap | length > 0 and peak_items | length > 0 %}
+                {% set buy = (cheap | map(attribute='price') | sum) / (cheap | length) %}
+                {% set sell = (peak_items | map(attribute='price') | sum) / (peak_items | length) %}
+                {% set eta = (efficiency_pct | float(82.9)) / 100 %}
+                {% set margin = (sell * eta - buy) / buy * 100 %}
+                {% if margin >= (min_margin_pct | float(5)) %}
+                {% set starts = cheap | map(attribute='start_time') | list %}
+                {% set t0 = (starts | min | replace('T', ' '))[0:19] %}
+                {% set t1 = (as_datetime(starts | max) + timedelta(hours=slot_h)).strftime('%Y-%m-%d %H:%M:%S') %}
+                {% set limit = ((cheap | map(attribute='price') | max) + 0.02) | round(4) %}
+                {% set plan.window = [t0, t1, limit, d, (margin | round(1)), (buy | round(4)), (sell | round(4)), eff] %}
+                {% endif %}{% endif %}
+                {% endif %}{% endfor %}
+                {% endif %}
+                {{ {'window': plan.window, 'full': plan.full} | to_json }}
+          - variables:
+              plan_window: "{{ (plan_json | from_json)['window'] }}"
+              plan_full: "{{ (plan_json | from_json)['full'] }}"
+          - service: "input_boolean.turn_{{ 'on' if plan_full else 'off' }}"
+            target:
+              entity_id: !input helper_full_flag
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ plan_window | length == 8 }}"
+                sequence:
+                  - service: input_datetime.set_datetime
+                    target:
+                      entity_id: !input helper_start
+                    data:
+                      datetime: "{{ plan_window[0] }}"
+                  - service: input_datetime.set_datetime
+                    target:
+                      entity_id: !input helper_end
+                    data:
+                      datetime: "{{ plan_window[1] }}"
+                  - service: input_number.set_value
+                    target:
+                      entity_id: !input helper_buy_limit
+                    data:
+                      value: "{{ plan_window[2] }}"
+                  - service: persistent_notification.create
+                    data:
+                      title: Akku-Ladeplanung
+                      message: >
+                        Neuer Plan für {{ plan_window[3] }}{{ ' (Volladung)' if plan_full else '' }}:
+                        Laden {{ plan_window[0][11:16] }}–{{ plan_window[1][11:16] }}
+                        Uhr, Limit {{ plan_window[2] }} EUR/kWh,
+                        Kauf {{ plan_window[5] }}, Spitze {{ plan_window[6] }},
+                        Marge {{ plan_window[4] }} %.
+            default:
+              - service: input_datetime.set_datetime
+                target:
+                  entity_id: !input helper_start
+                data:
+                  datetime: "{{ now().strftime('%Y-%m-%d') }} 00:00:00"
+              - service: input_datetime.set_datetime
+                target:
+                  entity_id: !input helper_end
+                data:
+                  datetime: "{{ now().strftime('%Y-%m-%d') }} 00:00:00"
+              - service: input_number.set_value
+                target:
+                  entity_id: !input helper_buy_limit
+                data:
+                  value: 0
+              - service: persistent_notification.create
+                data:
+                  title: Akku-Ladeplanung
+                  message: Kein Ladefenster mit ausreichender Marge gefunden.
+  - variables:
+      soc_now: "{{ states(soc_sensor) | float(50) }}"
+      eff_target: "{{ 100 if is_state(helper_full_flag, 'on') else (max_soc | float(90)) }}"
+      price_now: "{{ states(price_sensor) | float(999) }}"
+      buy_limit: "{{ states(helper_buy_limit) | float(999) }}"
+      in_window: >
+        {{ states(helper_start) not in ['unknown', 'unavailable', '']
+           and states(helper_end) not in ['unknown', 'unavailable', '']
+           and ' ' in states(helper_start) and ' ' in states(helper_end)
+           and as_datetime(states(helper_start)) <= now() <= as_datetime(states(helper_end)) }}
+      need_soc: "{{ (states(soc_sensor) | float(50)) < (100 if is_state(helper_full_flag, 'on') else (max_soc | float(90))) - 2 }}"
+      price_ok: "{{ (states(price_sensor) | float(999)) <= (states(helper_buy_limit) | float(999)) }}"
+      min_limit: "{{ min_soc | float(20) }}"
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ soc_now >= 99 }}"
+        sequence:
+          - service: input_datetime.set_datetime
+            target:
+              entity_id: !input helper_last_full
+            data:
+              date: "{{ now().strftime('%Y-%m-%d') }}"
+          - service: input_boolean.turn_off
+            target:
+              entity_id: !input helper_full_flag
+    default: []
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ in_window and need_soc and price_ok }}"
+        sequence:
+          - service: switch.turn_on
+            target:
+              entity_id: !input manual_switch
+          - service: number.set_value
+            target:
+              entity_id: !input charge_power_number
+            data:
+              value: "{{ max_charge_w }}"
+    default:
+      - service: switch.turn_off
+        target:
+          entity_id: !input manual_switch
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ soc_now <= min_limit }}"
+        sequence:
+          - service: switch.turn_off
+            target:
+              entity_id: !input allow_discharge_switch
+      - conditions:
+          - condition: template
+            value_template: "{{ soc_now >= min_limit + 5 }}"
+        sequence:
+          - service: switch.turn_on
+            target:
+              entity_id: !input allow_discharge_switch
+    default: []
