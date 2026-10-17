@@ -79,7 +79,7 @@ blueprint:
     und den Benutzer-Modus nur auf `manual` oder „nicht `manual`". Es
     wird also nur bei echten Wechseln geschrieben.
 
-    Version: 2026-10-17.4
+    Version: 2026-10-17.5
   domain: automation
   source_url: https://github.com/SirRufo/ha-utils/blob/main/blueprints/tibber_ladeplanung_omnibattery.yaml
   input:
@@ -516,16 +516,23 @@ action:
       min_limit: "{{ min_soc | float(20) }}"
       reserve_lock: "{{ (soc_now <= min_limit) | bool }}"
       charging: "{{ (in_window | bool) and (need_soc | bool) and (price_ok | bool) }}"
-      price_above_limit: "{{ (states(price_sensor) | float(999)) > (states(helper_buy_limit) | float(0)) }}"
+      price_above_limit: "{{ (states(helper_buy_limit) | float(0)) > 0 and (states(price_sensor) | float(999)) > (states(helper_buy_limit) | float(0)) }}"
       wm_state: "{{ states(work_mode_select) }}"
       fm_state: "{{ states(force_mode_select) }}"
       force_opts: "{{ state_attr(force_mode_select, 'options') | default([], true) }}"
       force_charge_opt: "{{ 'Charge' if 'Charge' in force_opts else 'charge' }}"
       force_idle_opt: >
-        {{- 'None' if 'None' in force_opts
-           else ('none' if 'none' in force_opts
-           else ('standby' if 'standby' in force_opts
-           else ('stop' if 'stop' in force_opts else 'standby'))) -}}
+        {%- set ns = namespace(val='STANDBY') -%}
+        {%- for opt in force_opts | default([], true) -%}
+          {%- if (opt | string | lower) not in ['charge', 'discharge'] -%}
+            {%- if opt is none or (opt | string | lower) == 'none' -%}
+              {%- set ns.val = 'NONE' -%}
+            {%- else -%}
+              {%- set ns.val = opt | string | upper -%}
+            {%- endif -%}
+          {%- endif -%}
+        {%- endfor -%}
+        {{ ns.val }}
       wm_target: >
         {%- if charging | bool or reserve_lock | bool -%}manual
         {%- elif price_above_limit | bool -%}{{ work_mode_ai }}
@@ -536,7 +543,7 @@ action:
         {%- if wm_target == work_mode_ai -%}{{ wm_state == 'manual' }}
         {%- else -%}{{ wm_state != 'manual' }}
         {%- endif -%}
-      fm_write: "{{ fm_state != fm_target }}"
+      fm_write: "{{ fm_state not in (none, 'unavailable', 'unknown', '') and (fm_state | string | upper) != force_idle_opt }}"
       mm_write: "{{ charging | bool and states(manual_mode_switch) != 'on' }}"
   - choose:
       - conditions:
@@ -594,7 +601,11 @@ action:
                     target:
                       entity_id: !input force_mode_select
                     data:
-                      option: "{{ fm_target }}"
+                      option: >
+                        {%- if charging | bool -%}{{ force_charge_opt | tojson }}
+                        {%- elif force_idle_opt == 'NONE' -%}{{ 'None' | tojson }}
+                        {%- else -%}{{ force_idle_opt | lower | tojson }}
+                        {%- endif -%}
   - choose:
       - conditions:
           - condition: template
@@ -609,7 +620,10 @@ action:
                     target:
                       entity_id: !input force_mode_select
                     data:
-                      option: "{{ fm_target }}"
+                      option: >
+                        {%- if force_idle_opt == 'NONE' -%}{{ 'None' | tojson }}
+                        {%- else -%}{{ force_idle_opt | lower | tojson }}
+                        {%- endif -%}
           - choose:
               - conditions:
                   - condition: template
