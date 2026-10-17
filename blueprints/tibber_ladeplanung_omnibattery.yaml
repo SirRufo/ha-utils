@@ -35,13 +35,14 @@ blueprint:
        Battery Manual Mode einschalten, Ladeleistung setzen, Erzwungener
        Modus auf Laden.
 
-       Ruhe — SoC fällt auf Min-SoC (Reserve, 5 % Hysterese):
+       Ruhe — SoC fällt auf Min-SoC (Reserve, 5 % Hysterese) oder der
+       aktuelle Preis liegt nicht über dem Kaufpreis-Limit:
        Benutzer-Modus `manual`, Erzwungener Modus auf nichts. Die
        Batterie entlädt dann nicht selbst.
 
-       Entladen — sonst: Erzwungener Modus zuerst auf nichts, dann
-       Benutzer-Modus auf die Entlade-Option. Die Batterie entscheidet
-       über das Entladen.
+       Entladen — aktueller Preis über dem Kaufpreis-Limit:
+       Erzwungener Modus zuerst auf nichts, dann Benutzer-Modus auf die
+       Entlade-Option. Die Batterie entlädt.
 
        Die Reihenfolge ist wichtig. Beim Laden zuerst der Benutzer-Modus
        und dann Battery Manual Mode, weil beide dasselbe Firmware-Byte
@@ -78,7 +79,7 @@ blueprint:
     und den Benutzer-Modus nur auf `manual` oder „nicht `manual`". Es
     wird also nur bei echten Wechseln geschrieben.
 
-    Version: 2026-10-17.3
+    Version: 2026-10-17.4
   domain: automation
   source_url: https://github.com/SirRufo/ha-utils/blob/main/blueprints/tibber_ladeplanung_omnibattery.yaml
   input:
@@ -515,6 +516,7 @@ action:
       min_limit: "{{ min_soc | float(20) }}"
       reserve_lock: "{{ (soc_now <= min_limit) | bool }}"
       charging: "{{ (in_window | bool) and (need_soc | bool) and (price_ok | bool) }}"
+      price_above_limit: "{{ (states(price_sensor) | float(999)) > (states(helper_buy_limit) | float(0)) }}"
       wm_state: "{{ states(work_mode_select) }}"
       fm_state: "{{ states(force_mode_select) }}"
       force_opts: "{{ state_attr(force_mode_select, 'options') | default([], true) }}"
@@ -526,7 +528,8 @@ action:
            else ('stop' if 'stop' in force_opts else 'standby'))) -}}
       wm_target: >
         {%- if charging | bool or reserve_lock | bool -%}manual
-        {%- else -%}{{ work_mode_ai }}
+        {%- elif price_above_limit | bool -%}{{ work_mode_ai }}
+        {%- else -%}manual
         {%- endif -%}
       fm_target: "{{ force_charge_opt if charging | bool else force_idle_opt }}"
       wm_write: >
