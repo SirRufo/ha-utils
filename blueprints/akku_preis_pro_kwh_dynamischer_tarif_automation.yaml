@@ -1,0 +1,155 @@
+blueprint:
+  name: Akku-Preis pro kWh (Dynamischer Tarif, Automation)
+  description: >
+    Führt einen laufenden Durchschnittspreis pro kWh im Akku bei dynamischem
+    Stromtarif - für reinen Netzbetrieb ohne PV-Anlage. Komplett per UI
+    einrichtbar, schreibt in einen Nummer-Helfer.
+
+    Modell: Der Akku lädt aus dem Netz (Kosten += geladene kWh × Preis beim Laden)
+    und entlädt für den Haushalt (Kosten -= entladene kWh × Durchschnittspreis
+    im Akku). Der Durchschnittspreis ändert sich nur beim Laden, weil beim
+    Entladen Energie zum Durchschnittspreis entnommen wird. Lade-/Entladeverluste
+    und Eigenverbrauch stecken implizit in der Differenz (mehr geladen als
+    entladen).
+
+    Einrichtung:
+    1. Helfer anlegen (Einstellungen -> Geräte & Dienste -> Helfer -> Nummer):
+       Minimum -100000, Maximum 100000, Schrittweite 0.000001, Einheit EUR/kWh,
+       Anzeigegenauigkeit 6, Anfangswert 0 (oder aktueller Preis, wenn der Akku
+       bereits geladen ist). Die 6 Nachkommastellen sind nötig, da kleine
+       Deltas nur Bruchteile ergeben.
+    2. Automation aus diesem Blueprint anlegen und Strompreis-Sensor,
+       Ladezähler, Entladezähler, SoC-Sensor, Kapazitäts-Sensor sowie den
+       Helfer als Preis-Konto auswählen.
+
+    Version: 2026-10-17.1
+
+    Hinweis: Der Durchschnittspreis ändert sich nur beim Laden. Beim Entladen
+    bleibt er gleich (Energie wird zum Durchschnittspreis entnommen). Wenn der
+    Akku leer wird, wird der Preis auf 0 zurückgesetzt.
+  domain: automation
+  source_url: https://github.com/SirRufo/ha-utils/blob/main/blueprints/akku_preis_pro_kwh_dynamischer_tarif_automation.yaml
+  input:
+    strompreis:
+      name: Dynamischer Strompreis
+      description: >
+        Aktueller Bezugspreis in EUR/kWh (z. B. Tibber-Sensor). Wird zum Zeitpunkt
+        jeder Ladung für die Bewertung herangezogen.
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: monetary
+    akku_geladen:
+      name: Akku-Ladung (Energiezähler)
+      description: >
+        Zähler der gesamt in den Akku geladenen Energie in kWh (steigend;
+        Tageszähler mit Mitternachts-Reset funktionieren ebenfalls).
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: energy
+    akku_entladen:
+      name: Akku-Entladung (Energiezähler)
+      description: >
+        Zähler der gesamt aus dem Akku entladenen Energie in kWh (steigend;
+        Tageszähler mit Mitternachts-Reset funktionieren ebenfalls).
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: energy
+    akku_soc:
+      name: Akku-SoC
+      description: >
+        Ladezustand des Akkus in % (z. B. sensor.marstek_venus_1_battery_soc).
+        Wird für die Berechnung der aktuell gespeicherten Energie verwendet.
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+    akku_kapazitaet:
+      name: Akku-Kapazität
+      description: >
+        Bruttokapazität des Akkus in kWh (z. B. sensor.marstek_venus_1_battery_total_energy).
+      default: sensor.marstek_venus_1_battery_total_energy
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: energy
+    preis_konto:
+      name: Preis-Konto (Nummer-Helfer)
+      description: >
+        input_number-Helfer in EUR/kWh, auf den der Durchschnittspreis
+        geschrieben wird (siehe Einrichtung in der Beschreibung).
+      selector:
+        entity:
+          filter:
+            - domain: input_number
+
+mode: queued
+max_exceeded: silent
+
+variables:
+  strompreis: !input strompreis
+  akku_geladen: !input akku_geladen
+  akku_entladen: !input akku_entladen
+  akku_soc: !input akku_soc
+  akku_kapazitaet: !input akku_kapazitaet
+  preis_konto: !input preis_konto
+
+trigger:
+  - platform: state
+    entity_id: !input akku_geladen
+    not_to:
+      - unknown
+      - unavailable
+    not_from:
+      - unknown
+      - unavailable
+  - platform: state
+    entity_id: !input akku_entladen
+    not_to:
+      - unknown
+      - unavailable
+    not_from:
+      - unknown
+      - unavailable
+
+condition: []
+
+action:
+  - variables:
+      neu: "{{ trigger.to_state.state | float(none) }}"
+      alt: "{{ trigger.from_state.state | float(none) if trigger.from_state is not none else none }}"
+      preis: "{{ states(strompreis) | float(none) }}"
+      soc: "{{ states(akku_soc) | float(none) }}"
+      kap: "{{ states(akku_kapazitaet) | float(none) }}"
+      bisher: "{{ states(preis_konto) | float(none) }}"
+  - condition: template
+    value_template: "{{ neu is not none and alt is not none and preis is not none and soc is not none and kap is not none and bisher is not none }}"
+  - variables:
+      delta: "{{ [neu - alt, 0] | max }}"
+      stored_kwh: "{{ soc * kap / 100 }}"
+      old_kwh: "{{ [stored_kwh - delta, 0] | max }}"
+      neuer_preis: >
+        {% if trigger.entity_id == akku_geladen %}
+          {% if stored_kwh <= 0 or old_kwh <= 0 %}
+            {{ preis | round(6) }}
+          {% else %}
+            {{ ((old_kwh * bisher + delta * preis) / stored_kwh) | round(6) }}
+          {% endif %}
+        {% else %}
+          {% if stored_kwh <= 0.01 %}
+            {{ 0 | round(6) }}
+          {% else %}
+            {{ bisher | round(6) }}
+          {% endif %}
+        {% endif %}
+  - service: input_number.set_value
+    target:
+      entity_id: !input preis_konto
+    data:
+      value: "{{ neuer_preis }}"
