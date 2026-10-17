@@ -27,14 +27,27 @@ blueprint:
        des Tages). Eine erkannte Volladung (SoC ≥ 99 %)
        setzt den Zähler zurück.
 
-    3. Steuerung (alle 5 Min.): Der Benutzer-Modus (`user_work_mode`) ist
-       die einzige Entität, die Laden UND Entladen steuert. Im Fenster und
-       SoC unter Ziel (Max-SoC bzw. 100 % bei Volladung) steht er auf
-       `manual`, dazu wird die Ladeleistung gesetzt. Fällt der SoC auf
-       Min-SoC, bleibt er auf `manual` (Reserve, mit 5 % Hysterese).
-       Sonst geht er auf die KI-Option (`trade_mode`, in neueren
-       Integrationsversionen `ai`) zurück und die Batterie-KI entscheidet
+    3. Steuerung (alle 5 Min.): Zwei Selects bilden zusammen die drei
+       Betriebsarten der Batterie.
+
+       Laden — Fenster, SoC unter Ziel (Max-SoC bzw. 100 % bei
+       Volladung) und Preis unter Limit: Benutzer-Modus `manual`,
+       Battery Manual Mode einschalten, Ladeleistung setzen, Erzwungener
+       Modus auf Laden.
+
+       Ruhe — SoC fällt auf Min-SoC (Reserve, 5 % Hysterese):
+       Benutzer-Modus `manual`, Erzwungener Modus auf nichts. Die
+       Batterie entlädt dann nicht selbst.
+
+       Entladen — sonst: Erzwungener Modus zuerst auf nichts, dann
+       Benutzer-Modus auf die Entlade-Option. Die Batterie entscheidet
        über das Entladen.
+
+       Die Reihenfolge ist wichtig. Beim Laden zuerst der Benutzer-Modus
+       und dann Battery Manual Mode, weil beide dasselbe Firmware-Byte
+       sind und ein Schreibvorgang den Steuermodus sonst wieder beenden
+       würde. Battery Manual Mode wird einmal eingeschaltet und nie wieder
+       ausgeschaltet.
 
     Benötigte Helfer (Einstellungen → Geräte & Dienste → Helfer):
 
@@ -44,22 +57,28 @@ blueprint:
     - 1× Datum/Uhrzeit NUR Datum: letzte Volladung
     - 1× Schalter: Volladung aktiv (input_boolean)
 
-    Hinweis: `user_work_mode` (Modbus 43000) und der RS485-Steuermodus
-    (42000) sind in der Firmware dasselbe Byte — jeder Schreibvorgang auf
-    das eine beendet das andere. Der Blueprint schreibt deshalb nur den
-    Benutzer-Modus und fasst den RS485-Schalter nicht an.
+    Hinweis: `user_work_mode` (Modbus 43000) und `battery_manual_mode` (42000)
+    sind in der Firmware dasselbe Byte — jeder Schreibvorgang auf das eine
+    beendet das andere. Deshalb schreibt der Blueprint den Benutzer-Modus
+    zuerst und den Steuermodus danach, und dieser bleibt dann eingeschaltet.
 
-    Die Reserve ist eine Betriebsart, keine harte Sperre: `manual` heißt,
-    die Batterie folgt nur noch Modbus-Kommandos und entlädt nicht
-    selbst. Eine echte SoC-Sperre gibt es über Modbus nicht — die gehört
-    in die Marstek-App.
+    Ohne eingeschalteten Battery Manual Mode reagiert die Batterie nicht
+    auf Modbus-Befehle. Nur mit dem Erzwungenen Modus auf Laden lädt sie
+    wirklich; `set_charge_power` allein genügt nicht. Die Optionswerte des
+    Erzwungenen Modus sind je nach Firmware `Charge` oder `charge` und
+    `None`, `standby` oder `stop`; der Blueprint liest sie aus den
+    Optionen der Entität und muss darum nicht angepasst werden.
 
-    Weil die Firmware den KI-Modus als `anti_feed` zurückliest, wird nur
-    bei einem echten Wechsel geschrieben, nicht bei jedem 5-Minuten-Lauf.
-    Deshalb ist `anti_feed` hier nicht wählbar: die Automation könnte es
-    nicht von der KI unterscheiden und würde alle 5 Minuten schreiben.
+    Die Reserve ist eine Betriebsart, keine harte Sperre: `manual` ohne
+    erzwungenen Modus heißt „nicht selbst entladen". Eine echte
+    SoC-Sperre gibt es über Modbus nicht — die gehört in die Marstek-App.
 
-    Version: 2026-10-17
+    Weil die Firmware den Automatik-Modus als `anti_feed` zurückliest,
+    prüft die Automation den Zustand des Erzwungenen Modus zuverlässig
+    und den Benutzer-Modus nur auf `manual` oder „nicht `manual`". Es
+    wird also nur bei echten Wechseln geschrieben.
+
+    Version: 2026-10-17.3
   domain: automation
   source_url: https://github.com/SirRufo/ha-utils/blob/main/blueprints/tibber_ladeplanung_omnibattery.yaml
   input:
@@ -98,28 +117,55 @@ blueprint:
     work_mode_select:
       name: Benutzer-Modus (User Work Mode)
       description: >
-        Marstek-Modbus-Select für den Arbeitsmodus (Modbus 43000). Er
-        steuert Laden UND Entladen. Optionen sind `manual` (nur
-        Modbus-Kommandos), `anti_feed` (Nulleinspeisung) und `trade_mode`
-        bzw. `ai` (KI-Optimierung).
+        Marstek-Modbus-Select für den Arbeitsmodus (Modbus 43000).
+        Zusammen mit dem Erzwungenen Modus steuert er Laden UND Entladen.
+        Optionen sind `manual` (nur Modbus-Kommandos) und `anti_feed`
+        (Nulleinspeisung bzw. Automatik).
       default: select.marstek_venus_1_user_work_mode
       selector:
         entity:
           filter:
             - domain: select
     work_mode_ai:
-      name: KI-Option
+      name: Entlade-Option
       description: >
-        Technischer Optionswert der KI. Ältere Integrationsversionen
-        nennen ihn `trade_mode`, ab 3.1.0-beta.3 heißt er bei Venus A/D
-        `ai`.
-      default: trade_mode
+        Optionswert, in den der Benutzer-Modus außerhalb des Ladefensters
+        und oberhalb von Min-SoC gesetzt wird. Laut Firmware ist das der
+        Automatik-Modus; neuere Integrationsversionen bieten zusätzlich
+        `ai` bzw. `trade_mode` an.
+      default: anti_feed
       selector:
         select:
           options:
-            - trade_mode
+            - anti_feed
             - ai
+            - trade_mode
           mode: dropdown
+    force_mode_select:
+      name: Erzwungener Modus (Force Mode)
+      description: >
+        Marstek-Modbus-Select (Modbus 42010). Nur mit ihm lädt die
+        Batterie wirklich; ohne ihn bleibt `set_charge_power` wirkungslos.
+        Muss in der Integration aktiviert sein, sonst gibt es die Entität
+        nicht. Die Optionswerte für Laden und Pause liest der Blueprint
+        aus dieser Entität, weil ihre Bezeichnung je nach Firmware und
+        Version wechselt.
+      default: select.marstek_venus_1_force_mode
+      selector:
+        entity:
+          filter:
+            - domain: select
+    manual_mode_switch:
+      name: Battery Manual Mode
+      description: >
+        Marstek-Modbus-Schalter (Modbus 42000). Muss eingeschaltet sein,
+        damit die Batterie auf Modbus-Befehle reagiert. Der Blueprint
+        schaltet ihn vor dem Laden ein und danach nie wieder aus.
+      default: switch.marstek_venus_1_battery_manual_mode
+      selector:
+        entity:
+          filter:
+            - domain: switch
     helper_start:
       name: Helfer Ladefenster-Start
       description: input_datetime-Helfer MIT Datum und Uhrzeit für den Ladebeginn.
@@ -278,6 +324,8 @@ variables:
   charge_power_number: !input charge_power_number
   work_mode_select: !input work_mode_select
   work_mode_ai: !input work_mode_ai
+  force_mode_select: !input force_mode_select
+  manual_mode_switch: !input manual_mode_switch
   helper_start: !input helper_start
   helper_end: !input helper_end
   helper_buy_limit: !input helper_buy_limit
@@ -468,14 +516,25 @@ action:
       reserve_lock: "{{ (soc_now <= min_limit) | bool }}"
       charging: "{{ (in_window | bool) and (need_soc | bool) and (price_ok | bool) }}"
       wm_state: "{{ states(work_mode_select) }}"
+      fm_state: "{{ states(force_mode_select) }}"
+      force_opts: "{{ state_attr(force_mode_select, 'options') | default([], true) }}"
+      force_charge_opt: "{{ 'Charge' if 'Charge' in force_opts else 'charge' }}"
+      force_idle_opt: >
+        {{- 'None' if 'None' in force_opts
+           else ('none' if 'none' in force_opts
+           else ('standby' if 'standby' in force_opts
+           else ('stop' if 'stop' in force_opts else 'standby'))) -}}
       wm_target: >
         {%- if charging | bool or reserve_lock | bool -%}manual
         {%- else -%}{{ work_mode_ai }}
         {%- endif -%}
+      fm_target: "{{ force_charge_opt if charging | bool else force_idle_opt }}"
       wm_write: >
         {%- if wm_target == work_mode_ai -%}{{ wm_state == 'manual' }}
         {%- else -%}{{ wm_state != 'manual' }}
         {%- endif -%}
+      fm_write: "{{ fm_state != fm_target }}"
+      mm_write: "{{ charging | bool and states(manual_mode_switch) != 'on' }}"
   - choose:
       - conditions:
           - condition: template
@@ -493,20 +552,68 @@ action:
   - choose:
       - conditions:
           - condition: template
-            value_template: "{{ wm_write | bool }}"
+            value_template: "{{ wm_target == 'manual' }}"
         sequence:
-          - service: select.select_option
-            target:
-              entity_id: !input work_mode_select
-            data:
-              option: "{{ wm_target }}"
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ wm_write | bool }}"
+                sequence:
+                  - service: select.select_option
+                    target:
+                      entity_id: !input work_mode_select
+                    data:
+                      option: manual
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ mm_write | bool }}"
+                sequence:
+                  - service: switch.turn_on
+                    target:
+                      entity_id: !input manual_mode_switch
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ charging | bool }}"
+                sequence:
+                  - service: number.set_value
+                    target:
+                      entity_id: !input charge_power_number
+                    data:
+                      value: "{{ max_charge_w }}"
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ fm_write | bool }}"
+                sequence:
+                  - service: select.select_option
+                    target:
+                      entity_id: !input force_mode_select
+                    data:
+                      option: "{{ fm_target }}"
   - choose:
       - conditions:
           - condition: template
-            value_template: "{{ charging | bool }}"
+            value_template: "{{ wm_target != 'manual' }}"
         sequence:
-          - service: number.set_value
-            target:
-              entity_id: !input charge_power_number
-            data:
-              value: "{{ max_charge_w }}"
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ fm_write | bool }}"
+                sequence:
+                  - service: select.select_option
+                    target:
+                      entity_id: !input force_mode_select
+                    data:
+                      option: "{{ fm_target }}"
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ wm_write | bool }}"
+                sequence:
+                  - service: select.select_option
+                    target:
+                      entity_id: !input work_mode_select
+                    data:
+                      option: "{{ wm_target }}"
