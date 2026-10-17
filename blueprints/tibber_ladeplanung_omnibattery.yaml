@@ -79,7 +79,7 @@ blueprint:
     und den Benutzer-Modus nur auf `manual` oder „nicht `manual`". Es
     wird also nur bei echten Wechseln geschrieben.
 
-    Version: 2026-10-17.6
+    Version: 2026-10-17.7
   domain: automation
   source_url: https://github.com/SirRufo/ha-utils/blob/main/blueprints/tibber_ladeplanung_omnibattery.yaml
   input:
@@ -142,6 +142,19 @@ blueprint:
             - ai
             - trade_mode
           mode: dropdown
+    battery_price_sensor:
+      name: Akku-Preis (Durchschnittspreis pro kWh)
+      description: >
+        input_number-Helfer in EUR/kWh, der den laufenden
+        Durchschnittspreis des gespeicherten Stroms enthält (z. B. aus
+        dem Blueprint „Akku-Preis pro kWh"). Wird für die
+        Entladeentscheidung verwendet: Entladen nur, wenn der aktuelle
+        Preis den Durchschnittspreis (nach Wirkungsgrad) über der
+        Mindestmarge übersteigt.
+      selector:
+        entity:
+          filter:
+            - domain: input_number
     force_mode_select:
       name: Erzwungener Modus (Force Mode)
       description: >
@@ -325,6 +338,7 @@ variables:
   charge_power_number: !input charge_power_number
   work_mode_select: !input work_mode_select
   work_mode_ai: !input work_mode_ai
+  battery_price_sensor: !input battery_price_sensor
   force_mode_select: !input force_mode_select
   manual_mode_switch: !input manual_mode_switch
   helper_start: !input helper_start
@@ -516,7 +530,8 @@ action:
       min_limit: "{{ min_soc | float(20) }}"
       reserve_lock: "{{ (soc_now <= min_limit) | bool }}"
       charging: "{{ (in_window | bool) and (need_soc | bool) and (price_ok | bool) }}"
-      discharge_ok: "{{ (states(helper_buy_limit) | float(0)) > 0 and ((states(price_sensor) | float(999)) * ((efficiency_pct | float(82.9)) / 100) - (states(helper_buy_limit) | float(0))) / (states(helper_buy_limit) | float(0)) * 100 >= (min_margin_pct | float(5)) }}"
+      battery_price: "{{ states(battery_price_sensor) | float(0) }}"
+      discharge_ok: "{{ battery_price > 0 and ((states(price_sensor) | float(999)) * ((efficiency_pct | float(82.9)) / 100) - battery_price) / battery_price * 100 >= (min_margin_pct | float(5)) }}"
       wm_state: "{{ states(work_mode_select) }}"
       fm_state: "{{ states(force_mode_select) }}"
       force_opts: "{{ state_attr(force_mode_select, 'options') | default([], true) }}"
