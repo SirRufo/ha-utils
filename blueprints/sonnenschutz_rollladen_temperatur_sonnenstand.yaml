@@ -13,8 +13,11 @@ blueprint:
     - Fensterkontakt (Pflicht): bei offenem Fenster mindestens auf Lüftungsposition
       hochfahren, Abend-Schließung und Sonnenschutz fahren dann nie darunter.
       Per Schalter Minimalschließung abschaltbar (Kontakt wird dann ignoriert).
+    - Keine überflüssigen Fahrbefehle: geschlossene Behänge (State 'closed' oder
+      Position bis zur Schließ-Toleranz) werden nicht erneut geschlossen, laufende
+      Fahrten und nicht erreichbare Entitäten bleiben unangetastet.
 
-    Version: 2026-10-13.7
+    Version: 2026-10-17
 
     Hinweis: Pro Himmelsrichtung eine Automation aus diesem Blueprint anlegen,
     da alle Rollläden einer Automation dieselbe Ausrichtung teilen.
@@ -157,12 +160,29 @@ blueprint:
       name: Positions-Toleranz
       description: >
         Keine Aktion, wenn die aktuelle Position bereits innerhalb dieser
-        Abweichung (± %) zur Zielposition liegt. Verhindert unnötige Fahrbefehle.
+        Abweichung (± %) zur Zielposition liegt. Gilt für Sonnenschutz- und
+        Öffnungs-Position.
       default: 3
       selector:
         number:
           min: 0
           max: 10
+          step: 1
+          unit_of_measurement: "%"
+          mode: slider
+    schliess_toleranz:
+      name: Schließ-Toleranz
+      description: >
+        Positionen bis zu diesem Wert gelten beim Schließen als bereits geschlossen
+        (zusätzlich zum State 'closed'). Nötig, wenn der Antrieb im geschlossenen
+        Zustand nie ganz auf 0 % meldet (Restposition 1-8 %): Ohne diesen Puffer
+        schließt die Automation alle 5 Minuten erneut. Auf 0 stellen, wenn der
+        Behang zuverlässig auf 0 % meldet.
+      default: 5
+      selector:
+        number:
+          min: 0
+          max: 15
           step: 1
           unit_of_measurement: "%"
           mode: slider
@@ -210,6 +230,7 @@ variables:
   lueftungsposition: !input lueftungsposition
   schutzposition: !input schutzposition
   positionstoleranz: !input positionstoleranz
+  schliess_toleranz: !input schliess_toleranz
   sonnenhoehe_schwelle: !input sonnenhoehe_schwelle
   oeffnungszeit: !input oeffnungszeit
   schliesszeit: !input schliesszeit
@@ -263,23 +284,24 @@ action:
             value_template: "{{ fenster_offen }}"
         sequence:
           - variables:
-              lueftung_fahren: >
-                {% set ns = namespace(ids=[]) %}
-                {% set ziel = lueftungsposition | float(20) %}
-                {% set tol = positionstoleranz | float(3) %}
-                {% for c in expand(rolllaeden.entity_id | default([])) %}
-                  {% set pos = c.attributes.get('current_position', none) %}
-                  {% if pos is none %}
-                    {% if c.state == 'closed' and (ziel - tol) > 0 %}
-                      {% set ns.ids = ns.ids + [c.entity_id] %}
-                    {% endif %}
-                  {% elif pos | float(100) < (ziel - tol) %}
-                    {% set ns.ids = ns.ids + [c.entity_id] %}
-                  {% endif %}
-                {% endfor %}
-                {{ ns.ids }}
+              lueftung_fahren: >-
+                {%- set ns = namespace(ids=[]) -%}
+                {%- set ziel = lueftungsposition | float(20) -%}
+                {%- set tol = positionstoleranz | float(3) -%}
+                {%- for c in expand(rolllaeden.entity_id | default([])) -%}
+                  {%- set pos = c.attributes.get('current_position', none) -%}
+                  {# Ohne Positionsangabe nur geschlossene Behaenge anfahren.
+                     Bewegte und nicht erreichbare Entitaeten bleiben unangetastet. #}
+                  {%- set zu_klein = (ziel - tol) > 0
+                        and ((pos is none and c.state == 'closed')
+                             or (pos is not none and pos | float(100) < ziel - tol)) -%}
+                  {%- if zu_klein and c.state not in ['opening', 'closing', 'unavailable', 'unknown'] -%}
+                    {%- set ns.ids = ns.ids + [c.entity_id] -%}
+                  {%- endif -%}
+                {%- endfor -%}
+                {{- ns.ids | join(', ') -}}
           - condition: template
-            value_template: "{{ lueftung_fahren | count > 0 }}"
+            value_template: "{{ lueftung_fahren | trim | length > 0 }}"
           - service: cover.set_cover_position
             target:
               entity_id: "{{ lueftung_fahren }}"
@@ -301,18 +323,27 @@ action:
                 value_template: "{{ not fenster_offen }}"
         sequence:
           - variables:
-              zu_fahren: >
-                {% set ns = namespace(ids=[]) %}
-                {% set tol = positionstoleranz | float(3) %}
-                {% for c in expand(rolllaeden.entity_id | default([])) %}
-                  {% set pos = c.attributes.get('current_position', none) %}
-                  {% if c.state != 'closed' and (pos is none or pos | float(100) > tol) %}
-                    {% set ns.ids = ns.ids + [c.entity_id] %}
-                  {% endif %}
-                {% endfor %}
-                {{ ns.ids }}
+              zu_fahren: >-
+                {%- set ns = namespace(ids=[]) -%}
+                {%- set tol = schliess_toleranz | float(5) -%}
+                {%- for c in expand(rolllaeden.entity_id | default([])) -%}
+                  {%- set pos = c.attributes.get('current_position', none) -%}
+                  {# "Schon geschlossen" heisst: State 'closed' ODER Position bis zur
+                     Schliess-Toleranz. Beide Angaben werden ODER-verknuepft geprueft,
+                     damit weder ein schlecht aktualisierter State noch eine Restposition
+                     den Schliessbefehl alle 5 Minuten wiederholt. #}
+                  {%- set geschlossen = c.state == 'closed'
+                        or (pos is not none and pos | float(100) <= tol) -%}
+                  {%- set bewegt = c.state in ['opening', 'closing'] -%}
+                  {%- set tot = c.state in ['unavailable', 'unknown'] -%}
+                  {%- if not geschlossen and not bewegt and not tot
+                        and (pos is none or pos | float(100) > tol) -%}
+                    {%- set ns.ids = ns.ids + [c.entity_id] -%}
+                  {%- endif -%}
+                {%- endfor -%}
+                {{- ns.ids | join(', ') -}}
           - condition: template
-            value_template: "{{ zu_fahren | count > 0 }}"
+            value_template: "{{ zu_fahren | trim | length > 0 }}"
           - service: cover.close_cover
             target:
               entity_id: "{{ zu_fahren }}"
@@ -324,23 +355,24 @@ action:
             value_template: "{{ sonne_auf_fenster and ist_zu_warm and sonne_hoch and im_tagfenster }}"
         sequence:
           - variables:
-              schutz_fahren: >
-                {% set ns = namespace(ids=[]) %}
-                {% set ziel = schutzposition | float(25) %}
-                {% set tol = positionstoleranz | float(3) %}
-                {% set mindest = lueftungsposition | float(20) %}
-                {% set schutz_erlaubt = (not fenster_offen) or (ziel >= mindest - tol) %}
-                {% if schutz_erlaubt %}
-                  {% for c in expand(rolllaeden.entity_id | default([])) %}
-                    {% set pos = c.attributes.get('current_position', none) %}
-                    {% if pos is none or ((pos | float(ziel) - ziel) | abs > tol) %}
-                      {% set ns.ids = ns.ids + [c.entity_id] %}
-                    {% endif %}
-                  {% endfor %}
-                {% endif %}
-                {{ ns.ids }}
+              schutz_fahren: >-
+                {%- set ns = namespace(ids=[]) -%}
+                {%- set ziel = schutzposition | float(25) -%}
+                {%- set tol = positionstoleranz | float(3) -%}
+                {%- set mindest = lueftungsposition | float(20) -%}
+                {%- set schutz_erlaubt = (not fenster_offen) or (ziel >= mindest - tol) -%}
+                {%- for c in expand(rolllaeden.entity_id | default([])) -%}
+                  {%- set pos = c.attributes.get('current_position', none) -%}
+                  {# Nur anfahren, wenn die Position ausserhalb der Toleranz liegt.
+                     Nicht erreichbare Entitaeten werden uebersprungen. #}
+                  {%- if schutz_erlaubt and c.state not in ['unavailable', 'unknown']
+                        and (pos is none or ((pos | float(ziel) - ziel) | abs > tol)) -%}
+                    {%- set ns.ids = ns.ids + [c.entity_id] -%}
+                  {%- endif -%}
+                {%- endfor -%}
+                {{- ns.ids | join(', ') -}}
           - condition: template
-            value_template: "{{ schutz_fahren | count > 0 }}"
+            value_template: "{{ schutz_fahren | trim | length > 0 }}"
           - service: cover.set_cover_position
             target:
               entity_id: "{{ schutz_fahren }}"
@@ -356,28 +388,27 @@ action:
             value_template: "{{ sonne_hoch and nach_oeffnung and im_tagfenster }}"
         sequence:
           - variables:
-              auf_fahren: >
-                {% set ns = namespace(ids=[]) %}
-                {% set tol = positionstoleranz | float(3) %}
-                {% set ziel = schutzposition | float(25) %}
-                {% for c in expand(rolllaeden.entity_id | default([])) %}
-                  {% set pos = c.attributes.get('current_position', none) %}
-                  {% if pos is none %}
-                    {% if c.state == 'closed' %}
-                      {% set ns.ids = ns.ids + [c.entity_id] %}
-                    {% endif %}
-                  {% else %}
-                    {% set erwartet_nacht = pos | float(100) <= tol %}
-                    {% set erwartet_schutz = ((pos | float(ziel) - ziel) | abs <= tol) %}
-                    {% set braucht_oeffnung = pos | float(0) < (100 - tol) %}
-                    {% if braucht_oeffnung and (erwartet_nacht or erwartet_schutz) %}
-                      {% set ns.ids = ns.ids + [c.entity_id] %}
-                    {% endif %}
-                  {% endif %}
-                {% endfor %}
-                {{ ns.ids }}
+              auf_fahren: >-
+                {%- set ns = namespace(ids=[]) -%}
+                {%- set tol = positionstoleranz | float(3) -%}
+                {%- set ziel = schutzposition | float(25) -%}
+                {%- for c in expand(rolllaeden.entity_id | default([])) -%}
+                  {%- set pos = c.attributes.get('current_position', none) -%}
+                  {# Manueller Eingriff wird respektiert: nur oeffnen, wenn der Behang
+                     noch auf der erwarteten Nacht- oder Schutzposition steht und
+                     noch nicht offen ist. Laeuft er bereits, wird nicht erneut
+                     befohlen (der naechste 5-Minuten-Lauf prueft erneut). #}
+                  {%- set erwartet = (pos is none and c.state == 'closed')
+                        or (pos is not none
+                            and pos | float(100) < 100 - tol
+                            and (pos | float(100) <= tol or ((pos | float(ziel) - ziel) | abs <= tol))) -%}
+                  {%- if erwartet and c.state not in ['opening', 'closing', 'unavailable', 'unknown'] -%}
+                    {%- set ns.ids = ns.ids + [c.entity_id] -%}
+                  {%- endif -%}
+                {%- endfor -%}
+                {{- ns.ids | join(', ') -}}
           - condition: template
-            value_template: "{{ auf_fahren | count > 0 }}"
+            value_template: "{{ auf_fahren | trim | length > 0 }}"
           - service: cover.open_cover
             target:
               entity_id: "{{ auf_fahren }}"
