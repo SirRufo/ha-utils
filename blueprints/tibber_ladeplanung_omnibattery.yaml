@@ -27,12 +27,14 @@ blueprint:
        des Tages). Eine erkannte Volladung (SoC ≥ 99 %)
        setzt den Zähler zurück.
 
-    3. Steuerung (alle 5 Min.): Im Fenster und SoC unter Ziel (Max-SoC bzw.
-       100 % bei Volladung) wird Battery Manual Mode eingeschaltet und 1200 W
-       Ladeleistung gesetzt. Sonst wird Manual Mode ausgeschaltet (= KI
-       übernimmt). Fällt der SoC auf Min-SoC, wird zusätzlich die Entladung
-       per Allow-Discharge-Schalter gesperrt (mit 5 % Hysterese), damit die
-       Reserve erhalten bleibt.
+    3. Steuerung (alle 5 Min.): Der Benutzer-Modus (`user_work_mode`) ist
+       die einzige Entität, die Laden UND Entladen steuert. Im Fenster und
+       SoC unter Ziel (Max-SoC bzw. 100 % bei Volladung) steht er auf
+       `manual`, dazu wird die Ladeleistung gesetzt. Fällt der SoC auf
+       Min-SoC, bleibt er auf `manual` (Reserve, mit 5 % Hysterese).
+       Sonst geht er auf die KI-Option (`trade_mode`, in neueren
+       Integrationsversionen `ai`) zurück und die Batterie-KI entscheidet
+       über das Entladen.
 
     Benötigte Helfer (Einstellungen → Geräte & Dienste → Helfer):
 
@@ -42,15 +44,22 @@ blueprint:
     - 1× Datum/Uhrzeit NUR Datum: letzte Volladung
     - 1× Schalter: Volladung aktiv (input_boolean)
 
-    Hinweis: Der Marstek KI-Modus (App) und die Omnibattery-Modbus-Steuerung
-    können nicht gleichzeitig führen. Während des Ladefensters gehört die
-    Batterie dieser Automation (Manual Mode), danach der KI. Die Min-SoC-Sperre
-    wirkt über den Omnibattery-Steuerungspfad; zusätzlich empfiehlt sich die
-    Min-SoC-Grenze in der Marstek-App. Wer das Entladen ebenfalls optimieren
-    will, nutzt stattdessen Omnibattery Dynamic Pricing (Tibber) mit
-    Mindest-Arbitrage-Marge.
+    Hinweis: `user_work_mode` (Modbus 43000) und der RS485-Steuermodus
+    (42000) sind in der Firmware dasselbe Byte — jeder Schreibvorgang auf
+    das eine beendet das andere. Der Blueprint schreibt deshalb nur den
+    Benutzer-Modus und fasst den RS485-Schalter nicht an.
 
-    Version: 2026-10-16.13
+    Die Reserve ist eine Betriebsart, keine harte Sperre: `manual` heißt,
+    die Batterie folgt nur noch Modbus-Kommandos und entlädt nicht
+    selbst. Eine echte SoC-Sperre gibt es über Modbus nicht — die gehört
+    in die Marstek-App.
+
+    Weil die Firmware den KI-Modus als `anti_feed` zurückliest, wird nur
+    bei einem echten Wechsel geschrieben, nicht bei jedem 5-Minuten-Lauf.
+    Deshalb ist `anti_feed` hier nicht wählbar: die Automation könnte es
+    nicht von der KI unterscheiden und würde alle 5 Minuten schreiben.
+
+    Version: 2026-10-17
   domain: automation
   source_url: https://github.com/SirRufo/ha-utils/blob/main/blueprints/tibber_ladeplanung_omnibattery.yaml
   input:
@@ -78,30 +87,39 @@ blueprint:
         entity:
           filter:
             - domain: sensor
-    manual_switch:
-      name: Battery Manual Mode
-      description: Omnibattery-Schalter für manuelle Kontrolle dieser Batterie.
-      default: switch.marstek_venus_1_battery_manual_mode
-      selector:
-        entity:
-          filter:
-            - domain: switch
     charge_power_number:
       name: Ladeleistung (Setpoint)
-      description: Omnibattery-Number für die Ladeleistung in W.
+      description: Marstek-Modbus-Number für die Ladeleistung in W.
       default: number.marstek_venus_1_set_charge_power
       selector:
         entity:
           filter:
             - domain: number
-    allow_discharge_switch:
-      name: Allow Discharge
-      description: Omnibattery-Schalter für die Entladefreigabe dieser Batterie.
-      default: switch.marstek_venus_1_battery_allow_discharge
+    work_mode_select:
+      name: Benutzer-Modus (User Work Mode)
+      description: >
+        Marstek-Modbus-Select für den Arbeitsmodus (Modbus 43000). Er
+        steuert Laden UND Entladen. Optionen sind `manual` (nur
+        Modbus-Kommandos), `anti_feed` (Nulleinspeisung) und `trade_mode`
+        bzw. `ai` (KI-Optimierung).
+      default: select.marstek_venus_1_user_work_mode
       selector:
         entity:
           filter:
-            - domain: switch
+            - domain: select
+    work_mode_ai:
+      name: KI-Option
+      description: >
+        Technischer Optionswert der KI. Ältere Integrationsversionen
+        nennen ihn `trade_mode`, ab 3.1.0-beta.3 heißt er bei Venus A/D
+        `ai`.
+      default: trade_mode
+      selector:
+        select:
+          options:
+            - trade_mode
+            - ai
+          mode: dropdown
     helper_start:
       name: Helfer Ladefenster-Start
       description: input_datetime-Helfer MIT Datum und Uhrzeit für den Ladebeginn.
@@ -185,7 +203,7 @@ blueprint:
           mode: box
     min_soc:
       name: Min-SoC (%)
-      description: Bei diesem SoC wird die Entladung gesperrt (Reserve).
+      description: Bei diesem SoC bleibt der Benutzer-Modus auf `manual` (Reserve).
       default: 20
       selector:
         number:
@@ -257,9 +275,9 @@ variables:
   price_sensor: !input price_sensor
   tibber_home: !input tibber_home
   soc_sensor: !input soc_sensor
-  manual_switch: !input manual_switch
   charge_power_number: !input charge_power_number
-  allow_discharge_switch: !input allow_discharge_switch
+  work_mode_select: !input work_mode_select
+  work_mode_ai: !input work_mode_ai
   helper_start: !input helper_start
   helper_end: !input helper_end
   helper_buy_limit: !input helper_buy_limit
@@ -447,6 +465,17 @@ action:
       need_soc: "{{ (states(soc_sensor) | float(50)) < (100 if is_state(helper_full_flag, 'on') else (max_soc | float(90))) - 2 }}"
       price_ok: "{{ (states(price_sensor) | float(999)) <= (states(helper_buy_limit) | float(999)) }}"
       min_limit: "{{ min_soc | float(20) }}"
+      reserve_lock: "{{ (soc_now <= min_limit) | bool }}"
+      charging: "{{ (in_window | bool) and (need_soc | bool) and (price_ok | bool) }}"
+      wm_state: "{{ states(work_mode_select) }}"
+      wm_target: >
+        {%- if charging | bool or reserve_lock | bool -%}manual
+        {%- else -%}{{ work_mode_ai }}
+        {%- endif -%}
+      wm_write: >
+        {%- if wm_target == work_mode_ai -%}{{ wm_state == 'manual' }}
+        {%- else -%}{{ wm_state != 'manual' }}
+        {%- endif -%}
   - choose:
       - conditions:
           - condition: template
@@ -464,33 +493,20 @@ action:
   - choose:
       - conditions:
           - condition: template
-            value_template: "{{ in_window and need_soc and price_ok }}"
+            value_template: "{{ wm_write | bool }}"
         sequence:
-          - service: switch.turn_on
+          - service: select.select_option
             target:
-              entity_id: !input manual_switch
+              entity_id: !input work_mode_select
+            data:
+              option: "{{ wm_target }}"
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ charging | bool }}"
+        sequence:
           - service: number.set_value
             target:
               entity_id: !input charge_power_number
             data:
               value: "{{ max_charge_w }}"
-    default:
-      - service: switch.turn_off
-        target:
-          entity_id: !input manual_switch
-  - choose:
-      - conditions:
-          - condition: template
-            value_template: "{{ soc_now <= min_limit }}"
-        sequence:
-          - service: switch.turn_off
-            target:
-              entity_id: !input allow_discharge_switch
-      - conditions:
-          - condition: template
-            value_template: "{{ soc_now >= min_limit + 5 }}"
-        sequence:
-          - service: switch.turn_on
-            target:
-              entity_id: !input allow_discharge_switch
-    default: []
