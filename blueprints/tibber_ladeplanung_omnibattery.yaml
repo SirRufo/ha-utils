@@ -27,14 +27,16 @@ blueprint:
        des Tages). Eine erkannte Volladung (SoC ≥ 99 %)
        setzt den Zähler zurück.
 
-    3. Steuerung (bei Preis-, SoC- oder Akku-Preis-Änderung, stündlich als
-       Fallback): Zwei Selects bilden zusammen die drei Betriebsarten der
-       Batterie.
+    3. Steuerung (bei Preis-, SoC-, Inverter- oder Akku-Preis-Änderung,
+       stündlich als Fallback): Zwei Selects bilden zusammen die drei
+       Betriebsarten der Batterie.
 
        Laden — Fenster, SoC unter Ziel (Max-SoC bzw. 100 % bei
        Volladung) und Preis unter Limit: Benutzer-Modus `manual`,
-       Battery Manual Mode einschalten, Ladeleistung setzen, Erzwungener
-       Modus auf Laden.
+       dann feste Sequenz Battery Manual Mode einschalten → Erzwungener
+       Modus auf Laden → Ladeleistung setzen. Bleibt der Wechselrichter
+       dann nicht im Ladezustand, wird die Integration neu geladen und
+       die Sequenz einmal wiederholt.
 
        Ruhe — SoC fällt auf Min-SoC (Reserve, 5 % Hysterese) oder der
        aktuelle Preis liegt nicht über dem Kaufpreis-Limit:
@@ -51,6 +53,11 @@ blueprint:
        würde. Battery Manual Mode wird einmal eingeschaltet und nie wieder
        ausgeschaltet.
 
+       Beim Entladen ist die Reihenfolge genau umgekehrt: zuerst der
+       Erzwungene Modus auf nichts, dann der Benutzer-Modus auf die
+       Entlade-Option — sonst räumt der Benutzer-Modus den Erzwungenen
+       Modus wieder ab.
+
     Benötigte Helfer (Einstellungen → Geräte & Dienste → Helfer):
 
     - 2× Datum/Uhrzeit MIT Datum und Uhrzeit: Ladefenster-Start, Ladefenster-Ende
@@ -60,6 +67,16 @@ blueprint:
     - 1× Schalter: Volladung aktiv (input_boolean)
     - 1× Nummer: Akku-Preis (input_number, EUR/kWh) aus dem Blueprint
       „Akku-Preis pro kWh" (wird für die Entladeentscheidung verwendet)
+    - optional 1× Datum/Uhrzeit MIT Datum und Uhrzeit: Sperre Neuladen
+
+    Beim Laden schreibt der Blueprint die Einstellungen immer in dieser
+    Reihenfolge: Battery Manual Mode einschalten, Force Mode auf `Charge`,
+    Ladeleistung setzen. Die Reihenfolge ist zwingend — jede andere
+    Reihenfolge bleibt wirkungslos.
+
+    Antwortet der Wechselrichter danach nicht mit dem Ladezustand, wird die
+    Omnibattery-Integration neu geladen und die Ladesequenz einmal
+    wiederholt (höchstens alle 6 Stunden).
 
     Hinweis: `user_work_mode` (Modbus 43000) und `battery_manual_mode` (42000)
     sind in der Firmware dasselbe Byte — jeder Schreibvorgang auf das eine
@@ -82,7 +99,7 @@ blueprint:
     und den Benutzer-Modus nur auf `manual` oder „nicht `manual`". Es
     wird also nur bei echten Wechseln geschrieben.
 
-    Version: 2026-10-18.2
+    Version: 2026-10-18.3
   domain: automation
   source_url: https://github.com/SirRufo/ha-utils/blob/main/blueprints/tibber_ladeplanung_omnibattery.yaml
   input:
@@ -110,6 +127,28 @@ blueprint:
         entity:
           filter:
             - domain: sensor
+    inverter_state_sensor:
+      name: Inverter-Zustand
+      description: >
+        Sensor für den Betriebszustand des Wechselrichters (z. B.
+        sensor.marstek_venus_1_inverter_state). Er wird nach dem Schreiben
+        der Ladeeinstellungen abgefragt: Erreicht er den Wert aus
+        „Zustandswert beim Laden" nicht rechtzeitig, wird die
+        Omnibattery-Integration neu geladen und die Ladesequenz wiederholt.
+      default: sensor.marstek_venus_1_inverter_state
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+    inverter_charge_value:
+      name: Zustandswert beim Laden
+      description: >
+        Wert, den der Inverter-Zustandssensor während des Ladens meldet
+        (in der Firmware `Charge`). Wird für die Erfolgsprüfung nach dem
+        Schreiben der Ladeeinstellungen verwendet.
+      default: Charge
+      selector:
+        text:
     charge_power_number:
       name: Ladeleistung (Setpoint)
       description: Marstek-Modbus-Number für die Ladeleistung in W.
@@ -183,6 +222,55 @@ blueprint:
         entity:
           filter:
             - domain: switch
+    verify_timeout:
+      name: Prüffrist Inverter (s)
+      description: >
+        Wie lange nach dem Schreiben der Ladeeinstellungen auf den
+        Ladezustand des Inverters gewartet wird, bevor die Integration neu
+        geladen wird.
+      default: 15
+      selector:
+        number:
+          min: 5
+          max: 120
+          step: 1
+          unit_of_measurement: s
+          mode: box
+    reload_wait:
+      name: Wartezeit nach Neuladen (s)
+      description: >
+        Wartezeit, bis die neu geladene Integration wieder Werte liefert.
+      default: 30
+      selector:
+        number:
+          min: 5
+          max: 180
+          step: 5
+          unit_of_measurement: s
+          mode: box
+    config_entry_id:
+      name: Config-Entry-ID Omnibattery (optional)
+      description: >
+        ID des Omnibattery-Integrationseintrags (Einstellungen → Geräte &
+        Dienste → Omnibattery → Konfiguration → ID). Wird nur für den
+        Notfall-Neuladungsversuch gebraucht: Geht der Inverter nach dem
+        Schreiben der Ladeeinstellungen nicht auf `Charge`, wird dieser
+        Eintrag neu geladen und die Ladesequenz einmal wiederholt. Leer
+        lassen deaktiviert den Neuladungsversuch.
+      default: ""
+      selector:
+        text:
+    reload_cooldown:
+      name: Sperre Neuladen (optional)
+      description: >
+        input_datetime-Helfer MIT Datum und Uhrzeit. Er wird vor jedem
+        Notfall-Neuladen gesetzt und verhindert, dass die Integration
+        höchstens einmal alle 6 Stunden neu geladen wird. Leer lassen
+        erlaubt das Neuladen bei jedem fehlgeschlagenen Ladeversuch.
+      selector:
+        entity:
+          filter:
+            - domain: input_datetime
     helper_start:
       name: Helfer Ladefenster-Start
       description: input_datetime-Helfer MIT Datum und Uhrzeit für den Ladebeginn.
@@ -338,12 +426,18 @@ variables:
   price_sensor: !input price_sensor
   tibber_home: !input tibber_home
   soc_sensor: !input soc_sensor
+  inverter_state_sensor: !input inverter_state_sensor
+  inverter_charge_value: !input inverter_charge_value
   charge_power_number: !input charge_power_number
   work_mode_select: !input work_mode_select
   work_mode_ai: !input work_mode_ai
   battery_price_sensor: !input battery_price_sensor
   force_mode_select: !input force_mode_select
   manual_mode_switch: !input manual_mode_switch
+  verify_timeout: !input verify_timeout
+  reload_wait: !input reload_wait
+  config_entry_id: !input config_entry_id
+  reload_cooldown: !input reload_cooldown
   helper_start: !input helper_start
   helper_end: !input helper_end
   helper_buy_limit: !input helper_buy_limit
@@ -394,6 +488,15 @@ trigger:
     id: control
   - platform: state
     entity_id: !input soc_sensor
+    not_to:
+      - unknown
+      - unavailable
+    not_from:
+      - unknown
+      - unavailable
+    id: control
+  - platform: state
+    entity_id: !input inverter_state_sensor
     not_to:
       - unknown
       - unavailable
@@ -587,6 +690,17 @@ action:
         {%- endif -%}
       fm_write: "{{ force_opts | length > 0 and (fm_state | string | upper) != (fm_target | string | upper) }}"
       mm_write: "{{ charging | bool and states(manual_mode_switch) != 'on' }}"
+      charge_state: "{{ states(inverter_state_sensor) }}"
+      need_charge_setup: "{{ (charging | bool) and ((mm_write | bool) or (fm_write | bool) or (charge_state | string | trim | lower) != (inverter_charge_value | string | trim | lower)) }}"
+      reload_ready: >
+        {%- set eid = config_entry_id | default('', true) | string | trim -%}
+        {%- set cd = reload_cooldown | default('', true) | string | trim -%}
+        {%- if eid | length == 0 -%}false
+        {%- elif cd | length == 0 -%}true
+        {%- elif cd in ['unknown', 'unavailable'] or '-' not in cd -%}true
+        {%- elif (as_timestamp(now()) - as_timestamp(cd)) > 21600 -%}true
+        {%- else -%}false
+        {%- endif -%}
   - choose:
       - conditions:
           - condition: template
@@ -604,7 +718,96 @@ action:
   - choose:
       - conditions:
           - condition: template
-            value_template: "{{ wm_target == 'manual' }}"
+            value_template: "{{ charging | bool and need_charge_setup | bool }}"
+        sequence:
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ wm_write | bool }}"
+                sequence:
+                  - service: select.select_option
+                    target:
+                      entity_id: !input work_mode_select
+                    data:
+                      option: manual
+          - service: switch.turn_on
+            target:
+              entity_id: !input manual_mode_switch
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ force_opts | length > 0 }}"
+                sequence:
+                  - service: select.select_option
+                    target:
+                      entity_id: !input force_mode_select
+                    data:
+                      option: "{{ force_charge_opt }}"
+          - service: number.set_value
+            target:
+              entity_id: !input charge_power_number
+            data:
+              value: "{{ max_charge_w }}"
+          - wait_template: "{{ charge_state | string | trim | lower == (inverter_charge_value | string | trim | lower) }}"
+            timeout: "00:00:{{ verify_timeout | int(15) }}"
+            continue_on_timeout: true
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ not wait.completed and reload_ready | bool }}"
+                sequence:
+                  - service: input_datetime.set_datetime
+                    target:
+                      entity_id: !input reload_cooldown
+                    data:
+                      datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+                  - service: homeassistant.reload_config_entry
+                    data:
+                      config_entry_id: "{{ config_entry_id }}"
+                  - delay:
+                      seconds: "{{ reload_wait | int(30) }}"
+                      milliseconds: 0
+                      minutes: 0
+                  - service: switch.turn_on
+                    target:
+                      entity_id: !input manual_mode_switch
+                  - choose:
+                      - conditions:
+                          - condition: template
+                            value_template: "{{ force_opts | length > 0 }}"
+                        sequence:
+                          - service: select.select_option
+                            target:
+                              entity_id: !input force_mode_select
+                            data:
+                              option: "{{ force_charge_opt }}"
+                  - service: number.set_value
+                    target:
+                      entity_id: !input charge_power_number
+                    data:
+                      value: "{{ max_charge_w }}"
+                  - wait_template: "{{ states(inverter_state_sensor) | string | trim | lower == (inverter_charge_value | string | trim | lower) }}"
+                    timeout: "00:00:{{ verify_timeout | int(15) }}"
+                    continue_on_timeout: true
+                  - choose:
+                      - conditions:
+                          - condition: template
+                            value_template: "{{ not wait.completed }}"
+                        sequence:
+                          - service: persistent_notification.create
+                            data:
+                              title: Akku-Ladeplanung
+                              notification_id: akku_ladeplanung_reload
+                              message: >
+                                Die Omnibattery-Integration wurde neu geladen und
+                                die Ladeeinstellungen wurden wiederholt, aber der
+                                Wechselrichter ging nicht auf
+                                „{{ inverter_charge_value }}". Manuell prüfen:
+                                Battery Manual Mode, Force Mode und Ladeleistung.
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ wm_target == 'manual' and not (charging | bool and need_charge_setup | bool) }}"
         sequence:
           - choose:
               - conditions:
@@ -627,16 +830,6 @@ action:
           - choose:
               - conditions:
                   - condition: template
-                    value_template: "{{ charging | bool }}"
-                sequence:
-                  - service: number.set_value
-                    target:
-                      entity_id: !input charge_power_number
-                    data:
-                      value: "{{ max_charge_w }}"
-          - choose:
-              - conditions:
-                  - condition: template
                     value_template: "{{ fm_write | bool }}"
                 sequence:
                   - service: select.select_option
@@ -644,8 +837,7 @@ action:
                       entity_id: !input force_mode_select
                     data:
                       option: >
-                        {%- if charging | bool -%}{{ force_charge_opt | tojson }}
-                        {%- elif force_idle_opt == 'NONE' -%}{{ 'None' | tojson }}
+                        {%- if force_idle_opt == 'NONE' -%}{{ 'None' | tojson }}
                         {%- else -%}{{ force_idle_opt | lower | tojson }}
                         {%- endif -%}
   - choose:
