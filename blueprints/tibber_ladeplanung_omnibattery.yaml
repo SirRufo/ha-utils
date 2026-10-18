@@ -27,8 +27,9 @@ blueprint:
        des Tages). Eine erkannte Volladung (SoC ≥ 99 %)
        setzt den Zähler zurück.
 
-    3. Steuerung (alle 5 Min.): Zwei Selects bilden zusammen die drei
-       Betriebsarten der Batterie.
+    3. Steuerung (bei Preis-, SoC- oder Akku-Preis-Änderung, stündlich als
+       Fallback): Zwei Selects bilden zusammen die drei Betriebsarten der
+       Batterie.
 
        Laden — Fenster, SoC unter Ziel (Max-SoC bzw. 100 % bei
        Volladung) und Preis unter Limit: Benutzer-Modus `manual`,
@@ -57,6 +58,8 @@ blueprint:
     - 1× Nummer: Kaufpreis-Limit in EUR/kWh (Schritt 0,005)
     - 1× Datum/Uhrzeit NUR Datum: letzte Volladung
     - 1× Schalter: Volladung aktiv (input_boolean)
+    - 1× Nummer: Akku-Preis (input_number, EUR/kWh) aus dem Blueprint
+      „Akku-Preis pro kWh" (wird für die Entladeentscheidung verwendet)
 
     Hinweis: `user_work_mode` (Modbus 43000) und `battery_manual_mode` (42000)
     sind in der Firmware dasselbe Byte — jeder Schreibvorgang auf das eine
@@ -79,7 +82,7 @@ blueprint:
     und den Benutzer-Modus nur auf `manual` oder „nicht `manual`". Es
     wird also nur bei echten Wechseln geschrieben.
 
-    Version: 2026-10-17.7
+    Version: 2026-10-17.8
   domain: automation
   source_url: https://github.com/SirRufo/ha-utils/blob/main/blueprints/tibber_ladeplanung_omnibattery.yaml
   input:
@@ -369,10 +372,34 @@ trigger:
     minutes: "5"
     id: plan
   - platform: time_pattern
-    minutes: "/5"
+    hours: "/1"
+    id: control
+  - platform: state
+    entity_id: !input price_sensor
+    not_to:
+      - unknown
+      - unavailable
+    not_from:
+      - unknown
+      - unavailable
+    id: control
+  - platform: state
+    entity_id: !input battery_price_sensor
+    not_to:
+      - unknown
+      - unavailable
+    not_from:
+      - unknown
+      - unavailable
     id: control
   - platform: state
     entity_id: !input soc_sensor
+    not_to:
+      - unknown
+      - unavailable
+    not_from:
+      - unknown
+      - unavailable
     id: control
   - platform: homeassistant
     event: start
