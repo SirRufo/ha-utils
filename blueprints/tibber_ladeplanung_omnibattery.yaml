@@ -837,8 +837,8 @@ action:
                       entity_id: !input force_mode_select
                     data:
                       option: >
-                        {%- if force_idle_opt == 'NONE' -%}{{ 'None' | tojson }}
-                        {%- else -%}{{ force_idle_opt | lower | tojson }}
+                        {%- if force_idle_opt == 'NONE' -%}None
+                        {%- else -%}{{ force_idle_opt | lower }}
                         {%- endif -%}
   - choose:
       - conditions:
@@ -855,8 +855,8 @@ action:
                       entity_id: !input force_mode_select
                     data:
                       option: >
-                        {%- if force_idle_opt == 'NONE' -%}{{ 'None' | tojson }}
-                        {%- else -%}{{ force_idle_opt | lower | tojson }}
+                        {%- if force_idle_opt == 'NONE' -%}None
+                        {%- else -%}{{ force_idle_opt | lower }}
                         {%- endif -%}
           - choose:
               - conditions:
