@@ -832,14 +832,25 @@ action:
                   - condition: template
                     value_template: "{{ fm_write | bool }}"
                 sequence:
-                  - service: select.select_option
-                    target:
-                      entity_id: !input force_mode_select
-                    data:
-                      option: >
-                        {%- if force_idle_opt == 'NONE' -%}None
-                        {%- else -%}{{ force_idle_opt | lower }}
-                        {%- endif -%}
+                  - choose:
+                      - conditions:
+                          - condition: template
+                            value_template: "{{ force_idle_opt == 'NONE' }}"
+                        sequence:
+                          - service: select.select_option
+                            target:
+                              entity_id: !input force_mode_select
+                            data:
+                              option: "None"
+                      - conditions:
+                          - condition: template
+                            value_template: "{{ force_idle_opt != 'NONE' }}"
+                        sequence:
+                          - service: select.select_option
+                            target:
+                              entity_id: !input force_mode_select
+                            data:
+                              option: "{{ force_idle_opt | lower }}"
   - choose:
       - conditions:
           - condition: template
@@ -850,14 +861,25 @@ action:
                   - condition: template
                     value_template: "{{ fm_write | bool }}"
                 sequence:
-                  - service: select.select_option
-                    target:
-                      entity_id: !input force_mode_select
-                    data:
-                      option: >
-                        {%- if force_idle_opt == 'NONE' -%}None
-                        {%- else -%}{{ force_idle_opt | lower }}
-                        {%- endif -%}
+                  - choose:
+                      - conditions:
+                          - condition: template
+                            value_template: "{{ force_idle_opt == 'NONE' }}"
+                        sequence:
+                          - service: select.select_option
+                            target:
+                              entity_id: !input force_mode_select
+                            data:
+                              option: "None"
+                      - conditions:
+                          - condition: template
+                            value_template: "{{ force_idle_opt != 'NONE' }}"
+                        sequence:
+                          - service: select.select_option
+                            target:
+                              entity_id: !input force_mode_select
+                            data:
+                              option: "{{ force_idle_opt | lower }}"
           - choose:
               - conditions:
                   - condition: template
