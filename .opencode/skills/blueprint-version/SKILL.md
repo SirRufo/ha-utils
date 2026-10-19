@@ -1,12 +1,20 @@
 ---
 name: blueprint-version
 description: >
-  Versionsnummer in der description von Home-Assistant-Blueprints pflegen (Format Version: yyyy-mm-dd[.Zähler]).
-  Lade diesen Skill, sobald ein Blueprint (*.yaml mit blueprint: und description:) erstellt oder geändert wird,
-  oder wenn der Nutzer "Version", "Blueprint-Version" oder "versionieren" erwähnt.
+  MANDATORY: Versionsnummer in der description von Home-Assistant-Blueprints pflegen (Format Version: yyyy-mm-dd[.Zähler]).
+  NIEMALS ÜBERGEHEN. Lade diesen Skill IMMER und bedingungslos, sobald ein Blueprint (*.yaml mit blueprint: und description:)
+  erstellt oder geändert wird — auch bei kleinsten Änderungen und Bugfixes — oder wenn der Nutzer
+  "Version", "Blueprint-Version" oder "versionieren" erwähnt. Jede Blueprint-Änderung erfordert einen Versions-Bump.
 ---
 
 # Blueprint-Version
+
+**PFLICHT / MANDATORY — NIEMALS ÜBERGEHEN.** Jede Erstellung oder Änderung eines
+Home-Assistant-Blueprints (`*.yaml` mit `blueprint:` und `description:`) erfordert
+zwingend eine Versionsaktualisierung in der `description` — ohne Ausnahme, auch bei
+kleinsten Änderungen, auch bei reinen Bugfixes, auch wenn der Nutzer es nicht explizit
+verlangt. Kein Commit eines geänderten Blueprints ohne aktualisierte `Version:`-Zeile.
+Bei Verstoß: Arbeit als unvollständig betrachten und nachholen.
 
 Jede Erstellung oder Änderung eines Home-Assistant-Blueprints bekommt eine Versionsnummer
 in der `description` des Blueprints.
