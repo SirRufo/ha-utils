@@ -6,14 +6,14 @@ blueprint:
     Sonoff-Rollos stoppen am Endanschlag nicht von selbst und bleiben als
     "öffnend"/"schließend" gemeldet. Dieser Blueprint löst `stop_cover` aus,
     sobald ein Rollo 2 Sekunden in der Endposition (offen oder geschlossen)
-    verharrt.
+    verharrt. Rollos können einzeln oder über Bereiche ausgewählt werden.
 
     - **Trigger:** Zustandswechsel `opening → open` bzw. `closing → closed`
       (jeweils 2 Sekunden Verzögerung)
     - **Aktion:** `cover.stop_cover` auf die auslösende Entität
     - **Modus:** `parallel`, max. 10
 
-    Version: 2026-10-25.3
+    Version: 2026-10-25.4
 
     > Die 2-Sekunden-Verzögerung verhindert ein versehentliches Stoppen
     > bei kurzen Bewegungen.
@@ -23,25 +23,52 @@ blueprint:
     covers:
       name: Cover-Entitäten
       description: >
-        Die Sonoff-Rollos, die am Endanschlag nicht automatisch stoppen.
+        Einzelne Sonoff-Rollos, die am Endanschlag nicht automatisch stoppen.
+      required: false
       selector:
         entity:
           domain: cover
           multiple: true
-trigger:
-  - platform: state
-    entity_id: !input covers
-    from: opening
-    to: open
-    for: "00:00:02"
-  - platform: state
-    entity_id: !input covers
-    from: closing
-    to: closed
-    for: "00:00:02"
-action:
-  - service: cover.stop_cover
-    target:
-      entity_id: "{{ trigger.entity_id }}"
-mode: parallel
-max: 10
+    areas:
+      name: Bereiche
+      description: >
+        Bereiche, deren Cover-Entitäten automatisch berücksichtigt werden.
+      required: false
+      selector:
+        area:
+          multiple: true
+          entity:
+            domain: cover
+  variables:
+    covers: !input covers
+    areas: !input areas
+    trigger_entity_id: "{{ trigger.event.data.entity_id }}"
+    trigger_target_state: "{{ trigger.event.data.new_state.state if trigger.event.data.new_state is not none else '' }}"
+  trigger:
+    - platform: event
+      event_type: state_changed
+  condition:
+    - condition: template
+      value_template: >
+        {% set eid = trigger.event.data.entity_id %}
+        {% set old = trigger.event.data.old_state %}
+        {% set new = trigger.event.data.new_state %}
+        {% if old is none or new is none %} false
+        {% elif old.state not in ['opening', 'closing'] %} false
+        {% elif new.state not in ['open', 'closed'] %} false
+        {% elif not (
+             (covers is not none and eid in covers) or
+             (areas is not none and area_id(eid) is not none and area_id(eid) in areas and eid.startswith('cover.'))
+           ) %} false
+        {% else %} true
+        {% endif %}
+  action:
+    - delay: "00:00:02"
+    - condition: template
+      value_template: >
+        {{ is_state(trigger_entity_id, trigger_target_state) }}
+    - service: cover.stop_cover
+      target:
+        entity_id: "{{ trigger_entity_id }}"
+  mode: parallel
+  max: 10
