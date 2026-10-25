@@ -1,10 +1,22 @@
 blueprint:
   name: Fix Sonoff Cover Stop at End
-  description: Stops the cover when it reaches the end position
+  description: >
+    Stoppt Sonoff-Rollos, die am Endanschlag nicht von selbst anhalten: Sobald
+    ein Rollo 2 Sekunden in der Endposition (offen oder geschlossen) verharrt,
+    wird stop_cover ausgelöst. Behebt das Problem, dass solche Rollos am
+    Endanschlag weiterhin als "öffnend"/"schließend" gemeldet werden.
+
+    Version: 2026-10-25.1
+
+    Hinweis: Der Blueprint überwacht den Zustandswechsel opening -> open bzw.
+    closing -> closed und wartet 2 Sekunden, bevor gestoppt wird. So wird ein
+    versehentliches Stoppen bei kurzen Bewegungen vermieden.
   domain: automation
   input:
     covers:
-      name: Cover entities
+      name: Cover-Entitäten
+      description: >
+        Die Sonoff-Rollos, die am Endanschlag nicht automatisch stoppen.
       selector:
         entity:
           domain: cover
