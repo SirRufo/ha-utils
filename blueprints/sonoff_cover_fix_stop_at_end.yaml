@@ -1,0 +1,28 @@
+blueprint:
+  name: Fix Sonoff Cover Stop at End
+  description: Stops the cover when it reaches the end position
+  domain: automation
+  input:
+    covers:
+      name: Cover entities
+      selector:
+        entity:
+          domain: cover
+          multiple: true
+trigger:
+  - platform: state
+    entity_id: !input covers
+    from: opening
+    to: open
+    for: "00:00:02"
+  - platform: state
+    entity_id: !input covers
+    from: closing
+    to: closed
+    for: "00:00:02"
+action:
+  - service: cover.stop_cover
+    target:
+      entity_id: "{{ trigger.entity_id }}"
+mode: parallel
+max: 10
