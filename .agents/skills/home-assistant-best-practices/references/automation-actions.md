@@ -14,6 +14,9 @@ This document covers the `actions:` block of automations and scripts, plus `mode
 9. [Parallel Actions](#parallel-actions)
 10. [Documenting Automations & Scripts](#documenting-automations--scripts)
 11. [Disabling Automations](#disabling-automations)
+12. [Measuring Elapsed Time Across Automations](#measuring-elapsed-time-across-automations)
+13. [Notify: Entity vs Action Namespace](#notify-entity-vs-action-namespace)
+14. [Trace Retention](#trace-retention)
 
 ---
 
@@ -76,7 +79,7 @@ Both waits set `wait.completed` and `wait.remaining`:
 - if:
     - "{{ not wait.completed }}"
   then:
-    - action: notify.mobile_app
+    - action: notify.mobile_app_phone
       data:
         message: "Door still open after 5 minutes!"
 ```
@@ -112,7 +115,7 @@ automation:
         entity_id: binary_sensor.doorbell
         to: "on"
     actions:
-      - action: notify.mobile_app
+      - action: notify.mobile_app_phone
         data:
           message: "Someone at the door!"
 ```
@@ -173,7 +176,7 @@ automation:
         for:
           minutes: 30
     actions:
-      - action: notify.mobile_app
+      - action: notify.mobile_app_phone
         data:
           message: "{{ trigger.to_state.name }} has been open for 30 minutes"
 ```
@@ -201,7 +204,7 @@ actions:
     target:
       entity_id: light.patio
     continue_on_error: true  # Automation proceeds even if this fails
-  - action: notify.mobile_app
+  - action: notify.mobile_app_phone
     data:
       message: "Light action attempted"
 ```
@@ -302,7 +305,7 @@ When an automation declares both `trigger_variables:` and `variables:`, the two 
   data:
     type: daily
   response_variable: forecast
-- action: notify.mobile_app
+- action: notify.mobile_app_phone
   data:
     message: "High today: {{ forecast['weather.home'].forecast[0].temperature }}°"
 ```
@@ -329,7 +332,7 @@ Four repeat variants are available:
         entity_id: binary_sensor.door
         state: "on"
     sequence:
-      - action: notify.mobile_app
+      - action: notify.mobile_app_phone
         data:
           message: "Door still open"
       - delay:
@@ -536,3 +539,90 @@ actions:
   - action: notify.notify
     enabled: false
 ```
+
+---
+
+## Measuring Elapsed Time Across Automations
+
+`this.attributes.last_triggered` is captured at trigger time, before the run stamps `last_triggered` —
+so it holds the **previous** run and is the right source for a cooldown condition. A live read
+(`state_attr(this.entity_id, 'last_triggered')`) still sees the previous run while the automation-level
+`variables:` and `conditions:` evaluate (they run before the action script), but "now" inside the
+actions, where the script has stamped `last_triggered` as it started: there it measures the elapsed time
+since *this* run started, not the interval since the previous run.
+
+`trigger.from_state.last_changed` is the timestamp of the entity's most recent state entry, so it is
+correct for a normal intended transition; it does not measure a logical interval across a restart or a
+momentary `unavailable`/`unknown` blip, both of which re-stamp it (see
+[triggers-and-conditions #for-duration-resets-on-restart-and-on-unavailable](triggers-and-conditions.md#for-duration-resets-on-restart-and-on-unavailable)).
+
+For a duration across automations — how long since a *different* automation ran — read that
+automation's `last_triggered`, or stamp a persistent `input_datetime` when the condition begins (the
+restart-proof idiom that same section documents):
+
+```yaml
+# RIGHT — duration since the companion automation last ran, not this one
+- action: notify.mobile_app_phone
+  data:
+    message: >
+      {{ state_attr('automation.fridge_door_opened', 'last_triggered') is not none
+         and ((now() - state_attr('automation.fridge_door_opened', 'last_triggered')).total_seconds() | int) ~ ' s ago'
+         or 'never triggered' }}
+```
+
+---
+
+## Notify: Entity vs Action Namespace
+
+Mobile App exposes each device twice, under two different `notify.*` names, and the two do not track
+each other:
+
+- **Entity** `notify.<device_name>` — the default entity id is the slugified device name (e.g.
+  `notify.iphone`), renameable, and callable only via the `notify.send_message` **action** (named
+  **service** before 2024.8) with `target:`.
+- **Per-device action** `notify.mobile_app_<device_name>` — registered dynamically from the *slugified*
+  device name (e.g. `notify.mobile_app_iphone`), callable directly.
+
+The entity id and the action name are different strings even at the defaults, so `notify.iphone` is not
+an action: `action: notify.iphone` fails with "action not found" regardless of any rename. Renaming the
+entity moves its id further, but the rule does not depend on it.
+
+```yaml
+# WRONG — notify.iphone is the entity, not an action
+- action: notify.iphone
+  data:
+    message: "door open"
+
+# RIGHT — the slugified device-named action
+- action: notify.mobile_app_iphone
+  data:
+    message: "door open"
+
+# RIGHT — the entity, via notify.send_message
+- action: notify.send_message
+  target:
+    entity_id: notify.iphone
+  data:
+    message: "door open"
+```
+
+---
+
+## Trace Retention
+
+Home Assistant keeps the last 5 traces of each automation; a YAML automation without an `id` keeps
+none. Every run uses one, including a run that stops at a condition or takes no `choose` branch, so a
+frequent trigger pushes out the run you need to debug: a `time_pattern` with `minutes: "/5"` replaces
+all five within 25 minutes.
+
+If the poll only backs up a state change that a trigger could miss, replace it with change-driven
+triggers (`homeassistant` `start`, a state trigger with only `to:`). Raise the limit only if the
+poll has to stay on a schedule:
+
+```yaml
+trace:
+  stored_traces: 20
+```
+
+"Did not trigger" traces (a trigger noticed a change but did not start the automation) are kept
+separately and never replace the traces of real runs.
