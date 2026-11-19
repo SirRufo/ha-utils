@@ -99,7 +99,7 @@ blueprint:
     und den Benutzer-Modus nur auf `manual` oder „nicht `manual`". Es
     wird also nur bei echten Wechseln geschrieben.
 
-    Version: 2026-10-19
+    Version: 2026-11-19
   domain: automation
   source_url: https://github.com/SirRufo/ha-utils/blob/main/blueprints/tibber_ladeplanung_omnibattery.yaml
   input:
@@ -353,27 +353,25 @@ blueprint:
           unit_of_measurement: "%"
           mode: box
     min_soc:
-      name: Min-SoC (%)
-      description: Bei diesem SoC bleibt der Benutzer-Modus auf `manual` (Reserve).
-      default: 20
+      name: Min-SoC-Sensor (%)
+      description: >
+        Sensor, der den Min-SoC in % liefert (Reserve). Bei diesem SoC bleibt
+        der Benutzer-Modus auf `manual`. Der Wert wird aus dem Sensor gelesen.
+      required: true
       selector:
-        number:
-          min: 5
-          max: 50
-          step: 1
-          unit_of_measurement: "%"
-          mode: box
+        entity:
+          filter:
+            - domain: sensor
     max_soc:
-      name: Max-SoC (%)
-      description: Bei diesem SoC endet das normale Laden.
-      default: 90
+      name: Max-SoC-Sensor (%)
+      description: >
+        Sensor, der den Max-SoC in % liefert. Bei diesem SoC endet das normale
+        Laden. Der Wert wird aus dem Sensor gelesen.
+      required: true
       selector:
-        number:
-          min: 50
-          max: 100
-          step: 1
-          unit_of_measurement: "%"
-          mode: box
+        entity:
+          filter:
+            - domain: sensor
     full_from_days:
       name: Volladung anstreben ab (Tage)
       description: Ab so vielen Tagen seit letzter Volladung laden, wenn billig.
@@ -543,7 +541,7 @@ action:
                 {% set hmin = (horizon.items | map(attribute='price') | min) if horizon.items | length > 0 else 999 %}
                 {% if days.n >= ((full_from_days | int(7)) + (full_offset_days | int(10))) %}{% set plan.full = true %}
                 {% elif days.n >= (full_from_days | int(7)) and hmin <= (full_cheap_price | float(0.30)) %}{% set plan.full = true %}{% endif %}
-                {% set eff = 100 if plan.full else (max_soc | float(90)) %}
+                {% set eff = 100 if plan.full else (states(max_soc) | float(90)) %}
                 {% set kapazitaet = states(capacity_sensor) | float(4.24) %}
                 {% set fehlt = [(eff - soc) / 100 * kapazitaet, 0] | max %}
                 {% set pro_slot = (max_charge_w | float(1200)) / 1000 * slot_h %}
@@ -647,7 +645,7 @@ action:
                   message: Kein Ladefenster mit ausreichender Marge gefunden.
   - variables:
       soc_now: "{{ states(soc_sensor) | float(50) }}"
-      eff_target: "{{ 100 if is_state(helper_full_flag, 'on') else (max_soc | float(90)) }}"
+      eff_target: "{{ 100 if is_state(helper_full_flag, 'on') else (states(max_soc) | float(90)) }}"
       price_now: "{{ states(price_sensor) | float(999) }}"
       buy_limit: "{{ states(helper_buy_limit) | float(999) }}"
       in_window: >
@@ -655,9 +653,9 @@ action:
            and states(helper_end) not in ['unknown', 'unavailable', '']
            and ' ' in states(helper_start) and ' ' in states(helper_end)
            and as_timestamp(states(helper_start)) <= as_timestamp(now()) <= as_timestamp(states(helper_end)) }}
-      need_soc: "{{ (states(soc_sensor) | float(50)) < (100 if is_state(helper_full_flag, 'on') else (max_soc | float(90))) - 2 }}"
+      need_soc: "{{ (states(soc_sensor) | float(50)) < (100 if is_state(helper_full_flag, 'on') else (states(max_soc) | float(90))) - 2 }}"
       price_ok: "{{ (states(price_sensor) | float(999)) <= (states(helper_buy_limit) | float(999)) }}"
-      min_limit: "{{ min_soc | float(20) }}"
+      min_limit: "{{ states(min_soc) | float(20) }}"
       reserve_lock: "{{ (soc_now <= min_limit) | bool }}"
       charging: "{{ (in_window | bool) and (need_soc | bool) and (price_ok | bool) }}"
       battery_price: "{{ states(battery_price_sensor) | float(0) }}"
