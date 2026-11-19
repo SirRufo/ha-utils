@@ -99,7 +99,7 @@ blueprint:
     und den Benutzer-Modus nur auf `manual` oder „nicht `manual`". Es
     wird also nur bei echten Wechseln geschrieben.
 
-    Version: 2026-11-19.1
+    Version: 2026-11-19.2
   domain: automation
   source_url: https://github.com/SirRufo/ha-utils/blob/main/blueprints/tibber_ladeplanung_omnibattery.yaml
   input:
@@ -353,23 +353,29 @@ blueprint:
           unit_of_measurement: "%"
           mode: box
     min_soc:
-      name: Min-SoC-Sensor (%)
+      name: Min-SoC-Quelle (%)
       description: >
-        Sensor, der den Min-SoC in % liefert (Reserve). Bei diesem SoC bleibt
-        der Benutzer-Modus auf `manual`. Der Wert wird aus dem Sensor gelesen.
+        Entität, die den Min-SoC in % liefert (Reserve), z. B.
+        number.marstek_venus_1_discharging_cutoff_capacity oder ein Sensor.
+        Bei diesem SoC bleibt der Benutzer-Modus auf `manual`. Der Wert wird
+        aus der Entität gelesen.
       selector:
         entity:
           filter:
             - domain: sensor
+            - domain: number
     max_soc:
-      name: Max-SoC-Sensor (%)
+      name: Max-SoC-Quelle (%)
       description: >
-        Sensor, der den Max-SoC in % liefert. Bei diesem SoC endet das normale
-        Laden. Der Wert wird aus dem Sensor gelesen.
+        Entität, die den Max-SoC in % liefert, z. B.
+        number.marstek_venus_1_charging_cutoff_capacity oder ein Sensor. Bei
+        diesem SoC endet das normale Laden. Der Wert wird aus der Entität
+        gelesen.
       selector:
         entity:
           filter:
             - domain: sensor
+            - domain: number
     full_from_days:
       name: Volladung anstreben ab (Tage)
       description: Ab so vielen Tagen seit letzter Volladung laden, wenn billig.
